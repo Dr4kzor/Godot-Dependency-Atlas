@@ -131,6 +131,27 @@ const ICON_FALLBACKS := {
 const SPECIAL_ICONS := {
 	"node_warning": ["StatusWarning"],
 	"host_badge": ["NodeWarning"],
+	"toolbar_layout": ["Grid", "GridContainer", "Control"],
+	"toolbar_sidecars": ["Import", "File"],
+	"toolbar_heat": ["GraphEdit", "GraphNode", "VisualShader"],
+	"toolbar_pair": ["Link", "Instance"],
+	"toolbar_connections": ["Curve3D", "Path3D", "Line2D"],
+	"toolbar_isolate": ["Zoom", "Search"],
+	"toolbar_inline": ["ScriptCreate", "Script"],
+	"toolbar_gather": ["CenterView", "SnapGrid"],
+	"toolbar_weight": ["Sort", "SortList"],
+	"toolbar_pull": ["Move", "ToolMove"],
+	"toolbar_group": ["Group", "Groups"],
+	"toolbar_labels": ["Font", "Label"],
+	"toolbar_label_cull": ["GuiVisibilityHidden", "GuiVisibilityVisible"],
+	"toolbar_filter": ["Filter", "Search"],
+	"toolbar_visibility": ["GuiVisibilityVisible", "GuiVisibilityHidden"],
+	"toolbar_home": ["CenterView", "ZoomReset"],
+	"toolbar_clear": ["Clear", "Remove"],
+	"toolbar_panels": ["Panels2", "HBoxContainer"],
+	"toolbar_files": ["Filesystem", "Folder"],
+	"toolbar_info": ["Info", "Help"],
+	"toolbar_help": ["Help", "Info"],
 }
 
 

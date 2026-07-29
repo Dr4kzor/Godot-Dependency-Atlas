@@ -334,6 +334,8 @@ var _status_label: Label
 var _info_label: RichTextLabel
 var _help_label: Label
 var _top_bar: VBoxContainer
+var _toolbar_buttons := {}
+var _toolbar_help: MenuButton
 var _left_panel: PanelContainer
 var _right_panel: PanelContainer
 var _left_show_button: Button
@@ -691,21 +693,12 @@ func _label_color(base: Color) -> Color:
 func _load_icons() -> void:
 	for kind_value in TypeIcons.Kind.values():
 		var kind = kind_value
-		var path: String = TypeIcons.icon_path_for(kind)
-		if ResourceLoader.exists(path):
-			var tex = load(path)
-			if tex is Texture2D:
-				_icon_textures[kind] = tex
-	var warning_path: String = TypeIcons.special_icon_path("node_warning")
-	if ResourceLoader.exists(warning_path):
-		var wtex = load(warning_path)
-		if wtex is Texture2D:
-			_warning_icon = wtex
-	var badge_path: String = TypeIcons.special_icon_path("host_badge")
-	if ResourceLoader.exists(badge_path):
-		var btex = load(badge_path)
-		if btex is Texture2D:
-			_host_badge_icon = btex
+		var texture := _load_exported_icon(TypeIcons.icon_path_for(kind))
+		if texture != null:
+			_icon_textures[kind] = texture
+	_warning_icon = _load_exported_icon(TypeIcons.special_icon_path("node_warning"))
+	_host_badge_icon = _load_exported_icon(TypeIcons.special_icon_path("host_badge"))
+	_apply_toolbar_icons()
 
 
 func _compute_in_degrees() -> void:
@@ -3676,6 +3669,182 @@ func _go_home() -> void:
 
 # ------------------------------------------------------------------ UI + picking
 
+func _load_exported_icon(path: String) -> Texture2D:
+	if ResourceLoader.exists(path):
+		var resource = load(path)
+		if resource is Texture2D:
+			return resource
+	# Exported EditorIcons may be used before the importer has produced a
+	# cache entry. Loading the PNG directly makes them available on the first
+	# viewer launch and keeps the exporter genuinely one-step.
+	var absolute_path := ProjectSettings.globalize_path(path)
+	if not FileAccess.file_exists(absolute_path):
+		return null
+	var image := Image.load_from_file(absolute_path)
+	if image != null and not image.is_empty():
+		return ImageTexture.create_from_image(image)
+	return null
+
+
+func _toolbar_icon(key: String) -> Texture2D:
+	return _load_exported_icon(TypeIcons.special_icon_path("toolbar_" + key))
+
+
+func _apply_toolbar_icons() -> void:
+	for id_any in _toolbar_buttons:
+		var id := String(id_any)
+		var button: Button = _toolbar_buttons[id]
+		var texture := _toolbar_icon(id)
+		if texture != null:
+			button.icon = texture
+	if _toolbar_help != null:
+		var help_texture := _toolbar_icon("help")
+		if help_texture != null:
+			_toolbar_help.icon = help_texture
+
+
+func _add_toolbar_button(row: HBoxContainer, id: String, label: String,
+		tooltip: String, action: Callable, toggle := false) -> Button:
+	var button := Button.new()
+	button.name = "Toolbar_" + id.capitalize()
+	button.text = label
+	button.tooltip_text = tooltip
+	button.toggle_mode = toggle
+	button.focus_mode = Control.FOCUS_NONE
+	button.custom_minimum_size.y = 16
+	button.pressed.connect(action)
+	row.add_child(button)
+	_toolbar_buttons[id] = button
+	return button
+
+
+func _add_toolbar_separator(row: HBoxContainer) -> void:
+	var separator := VSeparator.new()
+	separator.custom_minimum_size.x = 5
+	row.add_child(separator)
+
+
+func _send_toolbar_shortcut(key: Key) -> void:
+	var event := InputEventKey.new()
+	event.keycode = key
+	event.pressed = true
+	_unhandled_input(event)
+	call_deferred("_sync_toolbar_buttons")
+
+
+func _set_toolbar_pressed(id: String, pressed: bool) -> void:
+	if _toolbar_buttons.has(id):
+		(_toolbar_buttons[id] as Button).set_pressed_no_signal(pressed)
+
+
+func _sync_toolbar_buttons() -> void:
+	_set_toolbar_pressed("layout", _layout_mode == LayoutMode.FOLDER)
+	_set_toolbar_pressed("sidecars", _show_sidecars)
+	_set_toolbar_pressed("heat", _heat_mode)
+	_set_toolbar_pressed("pair", _pair_scripts)
+	_set_toolbar_pressed("isolate", _isolate_mode)
+	_set_toolbar_pressed("inline", _show_embed_links)
+	_set_toolbar_pressed("gather", _gather_enabled)
+	_set_toolbar_pressed("weight", _weight_layout)
+	_set_toolbar_pressed("pull", _relax_layout)
+	_set_toolbar_pressed("group", _group_affinity)
+	_set_toolbar_pressed("labels", _min_label_global)
+	_set_toolbar_pressed("label_cull", _label_distance_culling)
+	_set_toolbar_pressed("files", _left_panel != null and _left_panel.visible)
+	_set_toolbar_pressed("info", _right_panel != null and _right_panel.visible)
+	if _toolbar_buttons.has("connections"):
+		(_toolbar_buttons["connections"] as Button).tooltip_text = "Cycle connection rendering (T). Current: " + _line_style_name()
+
+
+func _add_help_text(popup: PopupMenu, text: String) -> void:
+	popup.add_item(text)
+	popup.set_item_disabled(popup.item_count - 1, true)
+
+
+func _build_toolbar_help() -> void:
+	var popup := _toolbar_help.get_popup()
+	_add_help_text(popup, "VIEW & LAYOUT")
+	_add_help_text(popup, "Tree (G) — switch between dependency depth and real folder structure")
+	_add_help_text(popup, "Sidecars (I) — include or hide .import and .uid files")
+	_add_help_text(popup, "Heat (H) — colour nodes by cycles and coupling instead of file type")
+	_add_help_text(popup, "Pair (P) — keep scripts near the scenes that own them")
+	_add_help_text(popup, "Lines (T) — cycle flat strands, cable strands, and weighted tubes")
+	_add_help_text(popup, "Weight (B) — place heavily connected files first")
+	_add_help_text(popup, "Pull (Y) — pull weakly linked files toward the files that reference them")
+	_add_help_text(popup, "Groups (J) — group files that share a naming convention")
+	popup.add_separator()
+	_add_help_text(popup, "FOCUS & READABILITY")
+	_add_help_text(popup, "Isolate (O) — show only the selection and its direct neighbours")
+	_add_help_text(popup, "Inline (U) — show links to resources whose code is copied into another file")
+	_add_help_text(popup, "Gather (R) — temporarily gather direct relations around the selection")
+	_add_help_text(popup, "Labels (M) — enforce a minimum screen size for every label")
+	_add_help_text(popup, "Cull (L) — hide distant labels except the selected neighbourhood")
+	_add_help_text(popup, "Clear (C) — remove path-trace or change-impact analysis overlays")
+	popup.add_separator()
+	_add_help_text(popup, "FILES & PANELS")
+	_add_help_text(popup, "Filter (K) — remove file types from analysis and recompute the layout")
+	_add_help_text(popup, "Hide — hide file types visually while keeping the full computed graph")
+	_add_help_text(popup, "Files (F1) / Info (F2) — show or hide the side panels")
+	_add_help_text(popup, "Open (F3) — scan another Godot project")
+	_add_help_text(popup, "Home (F or Home) — return the camera to its starting view")
+	popup.add_separator()
+	_add_help_text(popup, "MOUSE & CAMERA")
+	_add_help_text(popup, "Click captures/selects; click again deselects; right-click opens node actions")
+	_add_help_text(popup, "WASD + mouse flies; Q/E moves down/up; Shift boosts; wheel changes speed")
+	_add_help_text(popup, "Escape releases the mouse")
+
+
+func _build_toolbar() -> void:
+	var frame := PanelContainer.new()
+	frame.mouse_filter = Control.MOUSE_FILTER_STOP
+	_top_bar.add_child(frame)
+
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.custom_minimum_size.y = 38
+	frame.add_child(scroll)
+
+	var row := HBoxContainer.new()
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(row)
+
+	_add_toolbar_button(row, "layout", "Tree", "Switch dependency/folder layout (G)", _send_toolbar_shortcut.bind(KEY_G), true)
+	_add_toolbar_button(row, "sidecars", "Side", "Show .import and .uid sidecars (I)", _send_toolbar_shortcut.bind(KEY_I), true)
+	_add_toolbar_button(row, "heat", "Heat", "Entanglement heat colouring (H)", _send_toolbar_shortcut.bind(KEY_H), true)
+	_add_toolbar_button(row, "pair", "Pair", "Pair scripts with their owning scenes (P)", _send_toolbar_shortcut.bind(KEY_P), true)
+	_add_toolbar_button(row, "connections", "Lines", "Cycle connection rendering (T)", _send_toolbar_shortcut.bind(KEY_T))
+	_add_toolbar_separator(row)
+	_add_toolbar_button(row, "isolate", "Isolate", "Show selection and direct neighbours only (O)", _send_toolbar_shortcut.bind(KEY_O), true)
+	_add_toolbar_button(row, "inline", "Inline", "Show inlined-copy links (U)", _send_toolbar_shortcut.bind(KEY_U), true)
+	_add_toolbar_button(row, "gather", "Gather", "Gather direct relations around selection (R)", _send_toolbar_shortcut.bind(KEY_R), true)
+	_add_toolbar_separator(row)
+	_add_toolbar_button(row, "weight", "Weight", "Weight-aware layout (B)", _send_toolbar_shortcut.bind(KEY_B), true)
+	_add_toolbar_button(row, "pull", "Pull", "Pull nodes toward their references (Y)", _send_toolbar_shortcut.bind(KEY_Y), true)
+	_add_toolbar_button(row, "group", "Groups", "Group related naming families (J)", _send_toolbar_shortcut.bind(KEY_J), true)
+	_add_toolbar_separator(row)
+	_add_toolbar_button(row, "labels", "Labels", "Minimum size for all labels (M)", _send_toolbar_shortcut.bind(KEY_M), true)
+	_add_toolbar_button(row, "label_cull", "Cull", "Hide distant labels (L)", _send_toolbar_shortcut.bind(KEY_L), true)
+	_add_toolbar_button(row, "filter", "Filter", "Remove types from analysis and layout (K)", _open_filter_window)
+	_add_toolbar_button(row, "visibility", "Hide", "Hide types visually without changing analysis", _open_visibility_window)
+	_add_toolbar_separator(row)
+	_add_toolbar_button(row, "home", "Home", "Return camera to its starting view (F / Home)", _go_home)
+	_add_toolbar_button(row, "clear", "Clear", "Clear path/change-impact analysis (C)", _send_toolbar_shortcut.bind(KEY_C))
+	_add_toolbar_button(row, "files", "Files", "Show or hide Project Files panel (F1)", _send_toolbar_shortcut.bind(KEY_F1), true)
+	_add_toolbar_button(row, "info", "Info", "Show or hide Selection panel (F2)", _send_toolbar_shortcut.bind(KEY_F2), true)
+	_add_toolbar_button(row, "panels", "Open", "Scan another Godot project (F3)", _open_project_dialog)
+
+	_toolbar_help = MenuButton.new()
+	_toolbar_help.text = "Help"
+	_toolbar_help.tooltip_text = "What every toolbar button and shortcut does"
+	_toolbar_help.focus_mode = Control.FOCUS_NONE
+	_toolbar_help.custom_minimum_size.y = 34
+	row.add_child(_toolbar_help)
+	_build_toolbar_help()
+	_sync_toolbar_buttons()
+	_apply_toolbar_icons()
+
+
 func _build_ui() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
@@ -3779,9 +3948,11 @@ func _build_ui() -> void:
 	_outline_overlay(_status_label)
 	_top_bar.add_child(_status_label)
 
+	_build_toolbar()
+
 	_help_label = Label.new()
 	_help_label.autowrap_mode = TextServer.AUTOWRAP_WORD
-	_help_label.text = "Click = capture / select (again = deselect) | WASD + mouse = fly | Q/E = down/up | Shift = boost | Wheel = speed | Esc = release mouse | G = tree | I = sidecars | H = heat | P = pair | T = connection style | O = isolate | U = inlined-copy links | L = label culling | M = min label size | C = clear analysis | J = name grouping | B = weight layout | Y = pull to references | R = gather relations | F / Home = reset view | K = filters | F1 / F2 = panels | F3 = open project"
+	_help_label.text = "WASD + mouse = fly | Q/E = down/up | Shift = boost | Wheel = speed | Esc = release mouse | Hover a toolbar button or open Help for details"
 	_help_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
 	_help_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_outline_overlay(_help_label)
@@ -5517,6 +5688,9 @@ func _line_style_name() -> String:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed:
+		# Toolbar buttons and keyboard shortcuts are two faces of the same commands.
+		# Defer the visual sync until after this input branch mutates its state.
+		call_deferred("_sync_toolbar_buttons")
 		match event.keycode:
 			KEY_G:
 				_layout_mode = LayoutMode.FOLDER if _layout_mode == LayoutMode.DEPENDENCY else LayoutMode.DEPENDENCY
