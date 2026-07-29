@@ -235,6 +235,13 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 	var godot_deps := await godot_dependencies_async(all_files, progress, main_loop)
 
 	var roots := _find_roots(content_cache, file_set)
+	# project.godot is configuration, not an executable entry point and not a
+	# useful node in the 3D graph. Its direct resource settings (for example
+	# config/icon) are still protected from orphan reporting, but stay hidden
+	# unless executable content references them independently.
+	var project_owned := _project_owned_files(
+		String(content_cache.get("res://project.godot", "")), file_set
+	)
 	var root_paths := {}
 	for root_any in roots:
 		root_paths[String((root_any as Dictionary)["path"])] = true
@@ -386,6 +393,8 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 		var p4: String = all_files[i]
 		if seen.has(p4):
 			continue
+		if project_owned.has(p4):
+			continue
 		if _is_always_kept(p4):
 			continue
 		if _is_sidecar(p4):
@@ -448,7 +457,11 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 	if progress.is_valid():
 		progress.call("writing report", 0, -1)
 
-	var log_text := build_log_text(orphans, roots, dynamic_dirs, graph, unresolved_refs, seen.size(), all_files.size(), truncated, scanning_current_project(), godot_deps.size())
+	var reachable_count := seen.size()
+	for owned_any in project_owned:
+		if not seen.has(owned_any):
+			reachable_count += 1
+	var log_text := build_log_text(orphans, roots, dynamic_dirs, graph, unresolved_refs, reachable_count, all_files.size(), truncated, scanning_current_project(), godot_deps.size())
 
 	return {
 		"hierarchy": _combined_hierarchy(content_cache, class_to_path, language_symbols),
@@ -464,7 +477,7 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 		"depth": depth,
 		"tree_parent": tree_parent,
 		"unresolved_refs": unresolved_refs,
-		"reachable_count": seen.size(),
+		"reachable_count": reachable_count,
 		"total_files": all_files.size(),
 		"truncated_files": truncated,
 		"error": "",
@@ -482,12 +495,6 @@ static func _find_roots(content_cache: Dictionary, file_set: Dictionary) -> Arra
 	var project_cfg := String(content_cache.get("res://project.godot", ""))
 	if project_cfg == "":
 		return roots
-
-	# Project settings themselves own resources such as config/icon and are
-	# therefore part of the live graph, not merely a source of other roots.
-	if file_set.has("res://project.godot"):
-		seen["res://project.godot"] = true
-		roots.append({"path": "res://project.godot", "kind": "project settings"})
 
 	var main_scene := _cfg_value(project_cfg, "run/main_scene")
 	if main_scene != "" and file_set.has(main_scene) and not seen.has(main_scene):
@@ -515,6 +522,15 @@ static func _find_roots(content_cache: Dictionary, file_set: Dictionary) -> Arra
 			roots.append({"path": script_abs, "kind": "editor plugin"})
 
 	return roots
+
+
+static func _project_owned_files(project_cfg: String, file_set: Dictionary) -> Dictionary:
+	var result := {}
+	for token_any in _extract_res_tokens(project_cfg):
+		var resolved := _longest_known_prefix(String(token_any), file_set)
+		if resolved != "":
+			result[resolved] = true
+	return result
 
 
 static func _enabled_plugin_cfgs(project_cfg: String, file_set: Dictionary) -> Array:
