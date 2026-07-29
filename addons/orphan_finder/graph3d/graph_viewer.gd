@@ -134,23 +134,11 @@ const LOOSE_GRID_MIN := 4
 ## How far a family member may sit from its siblings before the verification
 ## pass treats the family as broken and regrids it.
 const FAMILY_MAX_SPREAD := 45.0
+const FAMILY_BASE_GAP := 6.0
 ## How many positions to try before accepting an overlap. Bounded so a very
 ## crowded layout degrades rather than stalling.
 const RESERVE_ATTEMPTS := 40
 const RESERVE_MARGIN := 3.0
-
-# --- connection-weight layout ------------------------------------------------
-## Places nodes by how connected they are rather than by traversal depth.
-##
-## Depth-first placement puts a file wherever the walk happened to reach it,
-## which strands hubs far from the files they serve and then needs relaxation
-## to drag them back. Placing the most-connected node first and letting each
-## one bring its own dependants as a finished block gets there directly.
-const WEIGHT_COLUMN_GAP := 10.0
-const WEIGHT_ROW_GAP := 6.0
-## Width at which the layout wraps to a new row, so the result is a broad
-## square rather than one very long strip.
-const WEIGHT_ROW_WIDTH := 220.0
 
 # --- proximity relaxation ----------------------------------------------------
 ## Pulls loosely-connected files toward whatever references them.
@@ -279,13 +267,10 @@ const COLOR_EMBED_LINK := Color(0.72, 0.42, 1.00)     # purple
 ## they're muted to avoid reading as live wiring.
 const COLOR_ORPHAN_EDGE := Color(0.66, 0.40, 0.38, 0.5)
 
-## Picking is a ray-sphere test with no distance limit. A world-space radius is
-## the right model here: it projects to a screen radius proportional to
-## size/distance, so the clickable area always tracks how big the node
-## actually looks. A fixed pixel radius does not -- it gives a node that
-## renders two pixels wide the same grab area as one filling the screen, which
-## makes picking a specific node out of a distant cluster nearly impossible.
-const PICK_RADIUS_SCALE := 1.6
+## Extra breathing room around the node's actual rendered bounds. Picking
+## derives its base radius from the Sprite3D texture dimensions (or the real
+## fallback mesh), rather than from the unrelated layout-size value.
+const PICK_VISUAL_PADDING := 1.15
 ## Floor on tolerance, as a fraction of distance to the node. Keeps a node
 ## that projects to a couple of pixels reachable without handing distant nodes
 ## a large grab area.
@@ -372,7 +357,6 @@ var _name_group_of := {}      # path -> group key
 var _parent_of := {}          # path -> the file it extends
 var _group_affinity := true
 var _relax_layout := true
-var _weight_layout := false
 var _hierarchy_placed := {}   # bases positioned by _centre_hierarchy_bases
 var _grid_placed := {}        # files positioned by a grid pass, never relaxed apart
 ## Rectangles already claimed by a placed block, per layer. Without this the
@@ -1007,9 +991,8 @@ func _layout_grid(tree: Dictionary) -> void:
 	# grid passes treat the whole volume as empty and drop blocks on top of
 	# nodes that are already there.
 	_reserve_existing_nodes()
-	if not _weight_layout:
-		_apply_group_depths()
-		_centre_hierarchy_bases()
+	_apply_group_depths()
+	_centre_hierarchy_bases()
 	_place_orphan_grid()
 	# After orphan placement: an orphan asset set has no position until then,
 	# and grouping something with no position does nothing. Runs in both
@@ -1023,8 +1006,7 @@ func _layout_grid(tree: Dictionary) -> void:
 	_place_shared_sinks_near_consumers()
 	# Last, so it can pull stray files toward their references while every
 	# grid built above stays intact.
-	if not _weight_layout:
-		_relax_toward_neighbours()
+	_relax_toward_neighbours()
 
 
 ## Nudges a script owned by exactly one scene to sit right beside it.
@@ -1598,132 +1580,10 @@ func _centre_hierarchy_bases() -> void:
 		# is registered afterwards so nothing else lands on it.
 		_release_reservation(base)
 		_positions[base] = Vector3(
-			base_centre.x, base_centre.y - LAYER_HEIGHT, lowest + WEIGHT_ROW_GAP
+			base_centre.x, base_centre.y - LAYER_HEIGHT, lowest + FAMILY_BASE_GAP
 		)
 		_reserve_at(base)
 		_hierarchy_placed[base] = true
-
-
-## Places nodes by connection weight, families first.
-##
-## Inheritance families are laid out before anything else, as whole units: a
-## family is a family regardless of which node happened to reference it, and
-## placing them per-referrer is what scattered subclasses across the graph.
-## Everything else follows heaviest-first, each node bringing its unclaimed
-## dependants as a square block beneath it.
-func _layout_by_weight(tree: Dictionary) -> void:
-	# Starts from nothing, so the table is cleared rather than inheriting
-	# claims from the grid layout that is not being used.
-	_positions.clear()
-	_sizes.clear()
-	_block_size.clear()
-	_grid_placed.clear()
-	_hierarchy_placed.clear()
-	_reserved.clear()
-	var degree := {}
-	var outgoing_degree := {}
-	for key in _graph.keys():
-		var source: String = key
-		var targets: Array = _graph[source]
-		degree[source] = int(degree.get(source, 0)) + targets.size()
-		outgoing_degree[source] = targets.size()
-		for t in targets:
-			degree[String(t)] = int(degree.get(String(t), 0)) + 1
-
-	var placed := {}
-	var cursor_x := 0.0
-	var row_z := 0.0
-
-	for block_any in _family_blocks():
-		var block: Dictionary = block_any
-		var base: String = block["base"]
-		var children: Array = []
-		for c in (block["children"] as Array):
-			var child: String = c
-			if not placed.has(child) and not _orphan_set.has(child) and not _dir_nodes.has(child):
-				children.append(child)
-		if children.is_empty():
-			continue
-
-		var extent := _square_grid(_order_by_kind(children), cursor_x, -LAYER_HEIGHT, row_z)
-		for c2 in children:
-			placed[String(c2)] = true
-
-		if not placed.has(base) and not _orphan_set.has(base):
-			var centre := Vector3.ZERO
-			var lowest := -INF
-			for c3 in children:
-				var position: Vector3 = _positions[String(c3)]
-				centre += position
-				lowest = maxf(lowest, position.z)
-			centre /= float(children.size())
-			# Exact placement, as above: centred under its family or nothing.
-			_release_reservation(base)
-			_positions[base] = Vector3(
-				centre.x, centre.y - LAYER_HEIGHT, lowest + WEIGHT_ROW_GAP
-			)
-			_reserve_at(base)
-			placed[base] = true
-
-		cursor_x += extent.x + WEIGHT_COLUMN_GAP
-
-	var ordered: Array = degree.keys()
-	ordered.sort_custom(func(a, b):
-		# A pure sink (data/resource file that is only read) must not claim a
-		# remote top-level block before any of its consumers are placed. Put
-		# nodes with outgoing edges first; they bring their referenced sinks
-		# with them as dependants below.
-		var a_is_sink := int(outgoing_degree.get(a, 0)) == 0
-		var b_is_sink := int(outgoing_degree.get(b, 0)) == 0
-		if a_is_sink != b_is_sink:
-			return not a_is_sink
-		var da := int(degree.get(a, 0))
-		var db := int(degree.get(b, 0))
-		if da != db:
-			return da > db
-		return String(a) < String(b)
-	)
-
-	for node_any in ordered:
-		var node: String = node_any
-		if placed.has(node) or _orphan_set.has(node) or _dir_nodes.has(node):
-			continue
-
-		_place_reserved(node, Vector3(cursor_x, 0.0, row_z))
-		placed[node] = true
-
-		var dependants: Array = []
-		for r in _refs_of(node):
-			var target: String = r
-			if placed.has(target) or _orphan_set.has(target) or _dir_nodes.has(target):
-				continue
-			dependants.append(target)
-
-		var span := Vector2.ZERO
-		if not dependants.is_empty():
-			span = _square_grid(
-				_order_by_kind(dependants), cursor_x, -LAYER_HEIGHT, row_z + WEIGHT_ROW_GAP
-			)
-			for d in dependants:
-				placed[String(d)] = true
-
-		cursor_x += maxf(span.x, WEIGHT_ROW_GAP) + WEIGHT_COLUMN_GAP
-		# Wrap so the whole layout stays a broad square rather than one very
-		# long strip that needs flying across to read.
-		if cursor_x > WEIGHT_ROW_WIDTH:
-			cursor_x = 0.0
-			row_z += maxf(span.y, WEIGHT_ROW_GAP) + WEIGHT_COLUMN_GAP * 2.0
-
-	for leftover_any in tree.get("depth", {}).keys():
-		var leftover: String = leftover_any
-		if not placed.has(leftover) and not _positions.has(leftover):
-			_place_reserved(leftover, Vector3(cursor_x, -LAYER_HEIGHT * 2.0, row_z))
-			cursor_x += WEIGHT_ROW_GAP
-
-	_assign_node_sizes(tree.get("depth", {}).keys())
-	# A multi-level family can share an already-placed intermediate base.
-	# Re-centre bottom-up after all nodes exist so Base -> Mid -> Leaf aligns.
-	_recentre_all_hierarchy_bases()
 
 
 ## Final sweep: grids anything the earlier passes left scattered.
@@ -1931,7 +1791,7 @@ func _verify_and_repair_families() -> void:
 			base_centre /= float(members.size())
 			_release_reservation(root2)
 			_positions[root2] = Vector3(
-				base_centre.x, base_centre.y - LAYER_HEIGHT, lowest + WEIGHT_ROW_GAP
+				base_centre.x, base_centre.y - LAYER_HEIGHT, lowest + FAMILY_BASE_GAP
 			)
 			_reserve_at(root2)
 			_grid_placed[root2] = true
@@ -1972,7 +1832,7 @@ func _recentre_all_hierarchy_bases() -> void:
 
 		_release_reservation(base)
 		_positions[base] = Vector3(
-			centre.x, centre.y - LAYER_HEIGHT, back_edge + WEIGHT_ROW_GAP
+			centre.x, centre.y - LAYER_HEIGHT, back_edge + FAMILY_BASE_GAP
 		)
 		_reserve_at(base)
 		_hierarchy_placed[base] = true
@@ -2467,20 +2327,7 @@ func _rebuild_all(reframe: bool = true) -> void:
 		tree = _build_dependency_tree()
 	_roots = (tree["roots"] as Array).duplicate()
 
-	if _weight_layout and _layout_mode == LayoutMode.DEPENDENCY:
-		_layout_by_weight(tree)
-		# Weight placement starts from a clean position table, so it needs the
-		# same finishing passes that depth layout runs internally. These add
-		# orphans and compact structural sets without changing the primary
-		# connection-driven ordering.
-		_place_orphan_grid()
-		_pack_shared_parent_sets()
-		_grid_remaining_assets()
-		_verify_and_repair_families()
-		_place_shared_sinks_near_consumers()
-		_assign_node_sizes(_positions.keys())
-	else:
-		_layout_grid(tree)
+	_layout_grid(tree)
 	await _refresh_visuals()
 	if reframe:
 		_frame_graph()
@@ -3779,8 +3626,6 @@ func _sync_toolbar_buttons() -> void:
 	_set_toolbar_state_icon("inline", "on" if _show_embed_links else "off")
 	_set_toolbar_pressed("gather", _gather_enabled)
 	_set_toolbar_state_icon("gather", "on" if _gather_enabled else "off")
-	_set_toolbar_pressed("weight", _weight_layout)
-	_set_toolbar_state_icon("weight", "on" if _weight_layout else "off")
 	_set_toolbar_pressed("pull", _relax_layout)
 	_set_toolbar_state_icon("pull", "on" if _relax_layout else "off")
 	_set_toolbar_pressed("group", _group_affinity)
@@ -3861,7 +3706,6 @@ func _refresh_toolbar_help() -> void:
 	_add_toolbar_help_entry("heat", "H", "Colour nodes by cycles and coupling instead of file type.")
 	_add_toolbar_help_entry("pair", "P", "Keep scripts near the scenes that own them.")
 	_add_toolbar_help_entry("connections", "T", "Cycle flat strands, cable strands, and weighted tubes.")
-	_add_toolbar_help_entry("weight", "B", "Place heavily connected files first.")
 	_add_toolbar_help_entry("pull", "Y", "Pull weakly linked files toward the files that reference them.")
 	_add_toolbar_help_entry("group", "J", "Group files that share a naming convention.")
 
@@ -3933,7 +3777,6 @@ func _build_toolbar() -> void:
 		"isolate": ["Isolate", "Show selection and direct neighbours only (O)", _send_toolbar_shortcut.bind(KEY_O)],
 		"inline": ["Inline", "Show inlined-copy links (U)", _send_toolbar_shortcut.bind(KEY_U)],
 		"gather": ["Gather", "Gather direct relations around selection (R)", _send_toolbar_shortcut.bind(KEY_R)],
-		"weight": ["Weight", "Weight-aware layout (B)", _send_toolbar_shortcut.bind(KEY_B)],
 		"pull": ["Pull", "Pull nodes toward their references (Y)", _send_toolbar_shortcut.bind(KEY_Y)],
 		"group": ["Group", "Group related naming families (J)", _send_toolbar_shortcut.bind(KEY_J)],
 		"labels": ["Labels", "Minimum size for all labels (M)", _send_toolbar_shortcut.bind(KEY_M)],
@@ -5852,14 +5695,6 @@ func _unhandled_input(event: InputEvent) -> void:
 					"ON" if _gather_enabled else "OFF"
 				))
 				return
-			KEY_B:
-				_weight_layout = not _weight_layout
-				await _rebuild_all()
-				_show_toast("Layout: %s" % (
-					"by connection weight — heaviest first, dependants beneath, subclasses under their base"
-					if _weight_layout else "by traversal depth"
-				))
-				return
 			KEY_Y:
 				_relax_layout = not _relax_layout
 				await _rebuild_all(false)
@@ -5987,6 +5822,7 @@ func _pick_node_at(screen_point: Vector2) -> String:
 	var direction := _camera.project_ray_normal(screen_point)
 
 	var best := ""
+	var best_entry := INF
 	var best_score := INF
 	for key in _positions.keys():
 		var path: String = key
@@ -5998,16 +5834,37 @@ func _pick_node_at(screen_point: Vector2) -> String:
 			continue   # behind the camera
 		var miss := (origin + direction * along).distance_to(world)
 		var tolerance := maxf(
-			float(_sizes.get(path, NODE_MIN_SIZE)) * PICK_RADIUS_SCALE,
+			_pick_radius_for(path),
 			along * PICK_MIN_ANGULAR
 		)
 		if miss > tolerance:
 			continue
 		var score := miss / tolerance
-		if score < best_score:
+		# Choose the first visible sphere hit. Comparing only centre alignment
+		# allowed a node behind the intended one to win when their targets
+		# overlapped, which made the clickable area feel off-centre.
+		var entry := along - sqrt(maxf(tolerance * tolerance - miss * miss, 0.0))
+		if entry < best_entry or (is_equal_approx(entry, best_entry) and score < best_score):
+			best_entry = entry
 			best_score = score
 			best = path
 	return best
+
+
+func _pick_radius_for(path: String) -> float:
+	if _sprites.has(path):
+		var sprite := _sprites[path] as Sprite3D
+		if sprite != null and sprite.texture != null:
+			var rendered := sprite.texture.get_size() * sprite.pixel_size
+			# A sphere enclosing the whole billboard includes its corners and
+			# remains centred on exactly the same position as the Sprite3D.
+			return rendered.length() * 0.5 * PICK_VISUAL_PADDING
+	var size := float(_sizes.get(path, NODE_MIN_SIZE))
+	if path == ORPHAN_HUB:
+		return size * sqrt(3.0) * 0.5 * PICK_VISUAL_PADDING
+	if path == CLUSTER_HUB:
+		return size * 0.6 * PICK_VISUAL_PADDING
+	return size * 0.5 * PICK_VISUAL_PADDING
 
 
 func _update_info() -> void:

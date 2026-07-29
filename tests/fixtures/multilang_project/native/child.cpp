@@ -1,2 +1,5 @@
 #include "base.hpp"
-class NativeChild : public NativeBase {};
+class NativeChild : public NativeBase {
+public:
+	static NativeChild *create();
+};

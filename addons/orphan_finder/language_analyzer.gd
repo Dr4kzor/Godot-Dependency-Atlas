@@ -166,6 +166,257 @@ static func build_roots(file_set: Dictionary) -> Array:
 	return out
 
 
+## Builds the explicit bridge between native source, its generated library,
+## the .gdextension descriptor that loads it, and classes registered with
+## Godot. The returned edges use normal graph direction: loader -> library ->
+## build manifest -> source.
+static func native_bridge(contents: Dictionary, file_set: Dictionary,
+		basename_index: Dictionary, symbol_index: Dictionary) -> Dictionary:
+	var edges := {}
+	var kinds := {}
+	var class_libraries := {}
+	var libraries: Array = []
+	var targets := _native_build_targets(contents, file_set, basename_index)
+	var registrations := _native_registrations(contents, symbol_index)
+
+	for key_any in contents:
+		var descriptor: String = key_any
+		if descriptor.get_extension().to_lower() != "gdextension":
+			continue
+		for library_any in _gdextension_libraries(
+			descriptor, String(contents[descriptor]), file_set, basename_index
+		):
+			var library := String(library_any)
+			if not libraries.has(library):
+				libraries.append(library)
+			_add_bridge_edge(edges, kinds, descriptor, library, "gdextension_library")
+			var target_name := _library_stem(library)
+			var target: Dictionary = _matching_native_target(targets, target_name)
+			if target.is_empty():
+				continue
+			var manifest := String(target.get("manifest", ""))
+			if manifest != "":
+				_add_bridge_edge(edges, kinds, library, manifest, "native_build_target")
+			for source_any in target.get("sources", []):
+				var source := String(source_any)
+				_add_bridge_edge(edges, kinds, library, source, "native_source")
+			# Only registrations compiled into this target can expose a class
+			# through this particular generated library.
+			var target_sources: Array = target.get("sources", [])
+			for class_any in registrations:
+				var registered_name := String(class_any)
+				var registration_source := String(registrations[registered_name])
+				if registration_source in target_sources:
+					class_libraries[registered_name] = library
+
+	return {
+		"edges": edges, "kinds": kinds,
+		"class_libraries": class_libraries, "libraries": libraries,
+	}
+
+
+## Explicit dynamic-library loads used by managed/native interop. This is
+## intentionally limited to well-known loader calls rather than treating
+## every matching string literal as executable evidence.
+static func native_library_references(content: String, libraries: Array) -> Array:
+	var out: Array = []
+	var regex := RegEx.new()
+	regex.compile("(?is)(?:DllImport|LibraryImport|NativeLibrary\\.Load|dlopen|LoadLibrary(?:A|W)?)[^\\(]*\\([ \\t\\r\\n]*[\\\"']([^\\\"']+)[\\\"']")
+	for match_any in regex.search_all(content):
+		var requested := _library_stem(String((match_any as RegExMatch).get_string(1)))
+		for library_any in libraries:
+			var library := String(library_any)
+			var available := _library_stem(library)
+			if requested == available or requested.begins_with(available + "_"):
+				if not out.has(library):
+					out.append(library)
+	return out
+
+
+static func _gdextension_libraries(descriptor: String, content: String,
+		file_set: Dictionary, basename_index: Dictionary) -> Array:
+	var out: Array = []
+	var in_libraries := false
+	for line_any in content.split("\n"):
+		var line := String(line_any).strip_edges()
+		if line.begins_with("["):
+			in_libraries = line == "[libraries]"
+			continue
+		if not in_libraries or line == "" or line.begins_with(";") or line.begins_with("#"):
+			continue
+		var eq := line.find("=")
+		if eq == -1:
+			continue
+		var value := line.substr(eq + 1).strip_edges().trim_prefix("\"").trim_suffix("\"")
+		var resolved := ""
+		if value.begins_with("res://") and file_set.has(value):
+			resolved = value
+		else:
+			resolved = _resolve_include(descriptor, value, file_set, basename_index)
+		if resolved != "" and not out.has(resolved):
+			out.append(resolved)
+	return out
+
+
+static func _native_build_targets(contents: Dictionary, file_set: Dictionary,
+		basename_index: Dictionary) -> Dictionary:
+	var targets := {}
+	for key_any in contents:
+		var manifest: String = key_any
+		if not is_build_file(manifest):
+			continue
+		var content := String(contents[manifest])
+		# CMake's add_library/add_executable calls provide the strongest
+		# target-to-source evidence and cover the common GDExtension setup.
+		var cmake := RegEx.new()
+		cmake.compile("(?is)add_(?:library|executable)[ \\t\\r\\n]*\\(([^\\)]+)\\)")
+		for match_any in cmake.search_all(content):
+			var body := String((match_any as RegExMatch).get_string(1))
+			var tokens := _build_tokens(body)
+			if tokens.is_empty():
+				continue
+			var target_name := String(tokens[0])
+			var sources := _resolve_build_sources(manifest, tokens.slice(1), file_set, basename_index)
+			targets[target_name] = {"manifest": manifest, "sources": sources}
+		var target_sources_regex := RegEx.new()
+		target_sources_regex.compile("(?is)target_sources[ \\t\\r\\n]*\\(([^\\)]+)\\)")
+		for match_any in target_sources_regex.search_all(content):
+			var tokens := _build_tokens(String((match_any as RegExMatch).get_string(1)))
+			if tokens.is_empty():
+				continue
+			var target_name := String(tokens[0])
+			if not targets.has(target_name):
+				continue
+			var definition: Dictionary = targets[target_name]
+			var sources: Array = definition.get("sources", [])
+			for source_any in _resolve_build_sources(
+				manifest, tokens.slice(1), file_set, basename_index
+			):
+				if not source_any in sources:
+					sources.append(source_any)
+			definition["sources"] = sources
+
+		# Conventional SCons: env.SharedLibrary("name", [sources...]).
+		var scons := RegEx.new()
+		scons.compile("(?is)(?:SharedLibrary|Library)[ \\t\\r\\n]*\\([ \\t\\r\\n]*[\\\"']([^\\\"']+)[\\\"'][ \\t\\r\\n]*,[ \\t\\r\\n]*([^\\)]*)\\)")
+		for match_any in scons.search_all(content):
+			var match: RegExMatch = match_any
+			var target_name := String(match.get_string(1))
+			var sources := _resolve_build_sources(
+				manifest, _build_tokens(match.get_string(2)), file_set, basename_index
+			)
+			targets[target_name] = {"manifest": manifest, "sources": sources}
+
+		# Meson literal form: shared_library('name', 'a.cpp', 'b.cpp').
+		var meson := RegEx.new()
+		meson.compile("(?is)shared_library[ \\t\\r\\n]*\\([ \\t\\r\\n]*[\\\"']([^\\\"']+)[\\\"'][ \\t\\r\\n]*,[ \\t\\r\\n]*([^\\)]*)\\)")
+		for match_any in meson.search_all(content):
+			var match: RegExMatch = match_any
+			var target_name := String(match.get_string(1))
+			var sources := _resolve_build_sources(
+				manifest, _build_tokens(match.get_string(2)), file_set, basename_index
+			)
+			targets[target_name] = {"manifest": manifest, "sources": sources}
+
+		# CMake may deliberately make the on-disk library name differ from
+		# the logical target name.
+		var output_name := RegEx.new()
+		output_name.compile("(?is)set_target_properties[ \\t\\r\\n]*\\([ \\t\\r\\n]*([A-Za-z0-9_.+-]+).*?OUTPUT_NAME[ \\t\\r\\n]+[\\\"']?([A-Za-z0-9_.+-]+)")
+		for match_any in output_name.search_all(content):
+			var match: RegExMatch = match_any
+			var target_name := String(match.get_string(1))
+			var alias := String(match.get_string(2))
+			if targets.has(target_name) and not targets.has(alias):
+				targets[alias] = targets[target_name]
+	return targets
+
+
+static func _native_registrations(contents: Dictionary, symbol_index: Dictionary) -> Dictionary:
+	var out := {}
+	var patterns := [
+		"(?:ClassDB::register_(?:abstract_)?class|GDREGISTER_CLASS)[ \\t\\r\\n]*(?:<|\\()[ \\t\\r\\n]*([A-Za-z_][A-Za-z0-9_:]*)",
+	]
+	for key_any in contents:
+		var path: String = key_any
+		if not path.get_extension().to_lower() in NATIVE_EXTENSIONS:
+			continue
+		var clean := strip_comments_and_strings(String(contents[path]), false)
+		for pattern in patterns:
+			var regex := RegEx.new()
+			if regex.compile(pattern) != OK:
+				continue
+			for match_any in regex.search_all(clean):
+				var registered_name := _unqualify(String((match_any as RegExMatch).get_string(1)))
+				if symbol_index.has(registered_name):
+					out[registered_name] = path
+	return out
+
+
+static func _build_tokens(body: String) -> Array:
+	var normalised := body.replace("\n", " ").replace("\r", " ").replace("\t", " ")
+	for character in ["\"", "'", "[", "]", ","]:
+		normalised = normalised.replace(character, " ")
+	var out: Array = []
+	for token_any in normalised.split(" ", false):
+		var token := String(token_any).strip_edges()
+		if token != "":
+			out.append(token)
+	return out
+
+
+static func _resolve_build_sources(manifest: String, tokens: Array,
+		file_set: Dictionary, basename_index: Dictionary) -> Array:
+	var ignored := ["STATIC", "SHARED", "MODULE", "OBJECT", "INTERFACE", "EXCLUDE_FROM_ALL",
+		"WIN32", "MACOSX_BUNDLE", "PRIVATE", "PUBLIC"]
+	var out: Array = []
+	for token_any in tokens:
+		var token := String(token_any)
+		if token in ignored or token.begins_with("$") or token.begins_with("-"):
+			continue
+		var resolved := _resolve_include(manifest, token, file_set, basename_index)
+		if resolved != "" and resolved.get_extension().to_lower() in NATIVE_EXTENSIONS:
+			if not out.has(resolved):
+				out.append(resolved)
+	return out
+
+
+static func _library_stem(path: String) -> String:
+	var stem := path.get_file().get_basename()
+	if stem.begins_with("lib"):
+		stem = stem.trim_prefix("lib")
+	# Godot's recommended output layout commonly uses names such as
+	# libdemo.linux.template_debug.x86_64.so.
+	if "." in stem:
+		stem = stem.get_slice(".", 0)
+	return stem
+
+
+static func _matching_native_target(targets: Dictionary, library_stem: String) -> Dictionary:
+	if targets.has(library_stem):
+		return targets[library_stem]
+	var matches: Array = []
+	for key_any in targets:
+		var target_name := String(key_any)
+		if library_stem.begins_with(target_name + "_"):
+			matches.append(target_name)
+	if matches.size() == 1:
+		return targets[matches[0]]
+	return {}
+
+
+static func _add_bridge_edge(edges: Dictionary, kinds: Dictionary,
+		source: String, target: String, kind: String) -> void:
+	if source == "" or target == "" or source == target:
+		return
+	if not edges.has(source):
+		edges[source] = []
+	if not target in edges[source]:
+		edges[source].append(target)
+	if not kinds.has(source):
+		kinds[source] = {}
+	kinds[source][target] = kind
+
+
 static func hierarchy(contents: Dictionary, symbol_index: Dictionary) -> Dictionary:
 	var parent_of := {}
 	var class_of := {}

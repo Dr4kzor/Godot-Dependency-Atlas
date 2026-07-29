@@ -7,6 +7,7 @@ func _initialize() -> void:
 	_test_csharp()
 	_test_cpp()
 	_test_build_roots()
+	_test_native_bridge()
 	if failures == 0:
 		print("Language analyzer: all tests passed")
 	quit(failures)
@@ -63,3 +64,41 @@ func _test_build_roots() -> void:
 	_expect(cmake in root_paths, "Build: GDExtension native manifest was not made a root")
 	var members := Analyzer.implicit_build_members(project, '<Project Sdk="Godot.NET.Sdk/4.7.0"></Project>', files)
 	_expect(cs in members, "Build: root-level SDK-style implicit C# compile membership was missed")
+
+
+func _test_native_bridge() -> void:
+	var descriptor := "res://native/demo.gdextension"
+	var library := "res://native/bin/libdemo.so"
+	var manifest := "res://native/CMakeLists.txt"
+	var source := "res://native/child.cpp"
+	var registration := "res://native/register_types.cpp"
+	var contents := {
+		descriptor: '[libraries]\nlinux.debug.x86_64 = "res://native/bin/libdemo.so"',
+		manifest: "add_library(demo SHARED child.cpp register_types.cpp)",
+		source: "class NativeChild {};",
+		registration: "void init() { ClassDB::register_class<NativeChild>(); }",
+	}
+	var files := {
+		descriptor: true, library: true, manifest: true, source: true,
+		registration: true,
+	}
+	var basenames := {
+		"libdemo.so": [library], "child.cpp": [source],
+		"register_types.cpp": [registration],
+	}
+	var symbols := Analyzer.build_symbol_index(contents)
+	var bridge := Analyzer.native_bridge(contents, files, basenames, symbols)
+	var edges: Dictionary = bridge.edges
+	_expect(library in edges.get(descriptor, []), "Native bridge: descriptor did not reach library")
+	_expect(manifest in edges.get(library, []), "Native bridge: library did not reach build manifest")
+	_expect(source in edges.get(library, []), "Native bridge: library did not reach compiled source")
+	_expect(
+		bridge.class_libraries.get("NativeChild", "") == library,
+		"Native bridge: registered class was not associated with its library"
+	)
+	_expect(
+		library in Analyzer.native_library_references(
+			'[DllImport("demo")] static extern void ping();', [library]
+		),
+		"Native bridge: C# DllImport did not resolve the generated library"
+	)

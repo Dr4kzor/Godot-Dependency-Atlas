@@ -1,6 +1,10 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://managed/Player.cs" id="1"]
+[ext_resource type="Script" path="res://native/native_user.gd" id="2"]
 
 [node name="Main" type="Node"]
 script = ExtResource("1")
+
+[node name="NativeUser" type="Node" parent="."]
+script = ExtResource("2")

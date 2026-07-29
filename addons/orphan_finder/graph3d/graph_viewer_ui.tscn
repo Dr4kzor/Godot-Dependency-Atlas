@@ -107,14 +107,6 @@ custom_minimum_size = Vector2(5, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="Weight" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=1053841928]
-custom_minimum_size = Vector2(24, 0)
-layout_mode = 2
-size_flags_horizontal = 3
-focus_mode = 0
-toggle_mode = true
-text = "Weight"
-
 [node name="Pull" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=1653880845]
 custom_minimum_size = Vector2(24, 0)
 layout_mode = 2

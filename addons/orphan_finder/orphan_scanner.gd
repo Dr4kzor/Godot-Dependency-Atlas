@@ -225,6 +225,16 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 	# explains a result -- if a file is wrongly reported as an orphan, the
 	# graph shows exactly which parent failed to mention it.
 	var basename_index := _build_basename_index(file_set)
+	# Generated native libraries are opaque, so reconstruct their provenance
+	# from .gdextension descriptors, native build targets and class
+	# registration calls before traversal begins.
+	var native_bridge := LanguageAnalyzer.native_bridge(
+		content_cache, file_set, basename_index, language_symbols
+	)
+	var native_edges: Dictionary = native_bridge.get("edges", {})
+	var native_edge_kinds: Dictionary = native_bridge.get("kinds", {})
+	var native_class_libraries: Dictionary = native_bridge.get("class_libraries", {})
+	var native_libraries: Array = native_bridge.get("libraries", [])
 
 	# Authoritative pass, unioned with the text scan below. The two find
 	# different things: Godot knows every real resource dependency including
@@ -362,6 +372,45 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 				dynamic_dirs.append({
 					"dir": dir_path, "referenced_in": current, "file_count": count,
 				})
+
+			# GDScript/C# code naming a class registered into a GDExtension
+			# depends on the generated library even though the engine exposes
+			# no res:// path for that runtime class.
+			if code_content != "":
+				for class_any in native_class_libraries:
+					var native_class := String(class_any)
+					var native_library := String(native_class_libraries[native_class])
+					if (
+						native_library != current
+						and _word_contains(code_content, native_class)
+						and not found.has(native_library)
+					):
+						found.append(native_library)
+						if not edge_kinds.has(current):
+							edge_kinds[current] = {}
+						edge_kinds[current][native_library] = "native_class"
+				for interop_any in LanguageAnalyzer.native_library_references(
+					content, native_libraries
+				):
+					var interop_library := String(interop_any)
+					if interop_library != current and not found.has(interop_library):
+						found.append(interop_library)
+						if not edge_kinds.has(current):
+							edge_kinds[current] = {}
+						edge_kinds[current][interop_library] = "native_interop"
+
+		# These inferred edges also apply to an unreadable .so/.dll/.dylib.
+		for bridge_target_any in native_edges.get(current, []):
+			var bridge_target := String(bridge_target_any)
+			if file_set.has(bridge_target) and not found.has(bridge_target):
+				found.append(bridge_target)
+			if not edge_kinds.has(current):
+				edge_kinds[current] = {}
+			edge_kinds[current][bridge_target] = String(
+				(native_edge_kinds.get(current, {}) as Dictionary).get(
+					bridge_target, "native_bridge"
+				)
+			)
 
 		# --- parsing done: only now record it and mark it seen ---
 		found.sort()
