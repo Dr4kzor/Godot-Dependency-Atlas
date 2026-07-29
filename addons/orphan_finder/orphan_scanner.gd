@@ -415,6 +415,10 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 		var orphan_path: String = orphan_entry["path"]
 		var orphan_content := String(content_cache.get(orphan_path, ""))
 		orphan_index += 1
+		if progress.is_valid() and orphan_index % 5 == 0:
+			progress.call("mapping orphan links", orphan_index, orphans.size())
+		if main_loop is SceneTree and (orphan_index % YIELD_EVERY_N == 0):
+			await (main_loop as SceneTree).process_frame
 		if orphan_content == "":
 			continue
 		var orphan_code := ""
@@ -445,17 +449,21 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 				orphan_refs.append(language_ref)
 		if not orphan_refs.is_empty():
 			orphan_graph[orphan_path] = orphan_refs
-		if progress.is_valid() and orphan_index % 5 == 0:
-			progress.call("mapping orphan links", orphan_index, orphans.size())
-		if main_loop is SceneTree and (orphan_index % YIELD_EVERY_N == 0):
-			await (main_loop as SceneTree).process_frame
 
 	if progress.is_valid():
 		progress.call("checking duplicated content", 0, orphans.size())
-	_find_duplicated_content(orphans, content_cache, seen, progress)
+	await _find_duplicated_content(orphans, content_cache, seen, progress, main_loop)
+
+	if progress.is_valid():
+		progress.call("building class hierarchy", 0, -1)
+	if main_loop is SceneTree:
+		await (main_loop as SceneTree).process_frame
+	var hierarchy := _combined_hierarchy(content_cache, class_to_path, language_symbols)
 
 	if progress.is_valid():
 		progress.call("writing report", 0, -1)
+	if main_loop is SceneTree:
+		await (main_loop as SceneTree).process_frame
 
 	var reachable_count := seen.size()
 	for owned_any in project_owned:
@@ -464,7 +472,7 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 	var log_text := build_log_text(orphans, roots, dynamic_dirs, graph, unresolved_refs, reachable_count, all_files.size(), truncated, scanning_current_project(), godot_deps.size())
 
 	return {
-		"hierarchy": _combined_hierarchy(content_cache, class_to_path, language_symbols),
+		"hierarchy": hierarchy,
 		"orphans": orphans,
 		"godot_pass_used": scanning_current_project(),
 		"godot_dependency_files": godot_deps.size(),
@@ -667,22 +675,22 @@ static func _extract_references(
 			files[loose] = true
 			kinds[loose] = "filename"
 
-	# Global class_name usage, e.g. `Item.new()` or `extends Item`. Matched
-	# against stripped code when available so comment mentions are demoted
-	# to "class_name_weak" rather than counted as real dependencies.
-	var searchable := code_content if code_content != "" else content
-	for key in class_to_path.keys():
-		var cls: String = key
-		var target2: String = class_to_path[cls]
-		if kinds.has(target2) and String(kinds[target2]) != "class_name_weak":
-			continue
-		if _word_contains(searchable, cls):
-			files[target2] = true
-			kinds[target2] = "class_name"
-		elif code_content != "" and _word_contains(content, cls):
-			# Present in the file, but only inside a comment or string.
-			files[target2] = true
-			kinds[target2] = "class_name_weak"
+	# Global type names are meaningful in source code. Searching scenes and
+	# data once per declared class is both noisy and quadratic on large projects.
+	var searchable := code_content
+	if searchable != "":
+		for key in class_to_path.keys():
+			var cls: String = key
+			var target2: String = class_to_path[cls]
+			if kinds.has(target2) and String(kinds[target2]) != "class_name_weak":
+				continue
+			if _word_contains(searchable, cls):
+				files[target2] = true
+				kinds[target2] = "class_name"
+			elif _word_contains(content, cls):
+				# Present in the file, but only inside a comment or string.
+				files[target2] = true
+				kinds[target2] = "class_name_weak"
 
 	return {"files": files.keys(), "dirs": dirs.keys(), "unresolved": unresolved.keys(), "kinds": kinds}
 
@@ -719,17 +727,25 @@ static func _extract_quoted_literals(content: String) -> Array:
 			continue
 		if c == "\"" or c == "'":
 			var quote := c
-			var j := i + 1
-			var literal := ""
-			while j < length and content[j] != quote:
-				if content[j] == "\\":
-					if j + 1 < length:
-						literal += content[j + 1]
-					j += 2
-					continue
-				literal += content[j]
+			var start := i + 1
+			var j := start
+			var escaped := false
+			while j < length:
+				var current: String = content[j]
+				if not escaped and current == quote:
+					break
+				if not escaped and current == "\\":
+					escaped = true
+				else:
+					escaped = false
 				j += 1
-			if literal != "":
+			# Reference-like literals are short. Bounding them prevents huge
+			# serialized values from being copied and inspected as file paths.
+			var literal_length := j - start
+			if literal_length > 0 and literal_length <= MAX_QUOTED_REFERENCE_LENGTH:
+				var literal := content.substr(start, literal_length)
+				if literal.contains("\\"):
+					literal = literal.replace("\\\"", "\"").replace("\\'", "'").replace("\\\\", "\\")
 				out.append(literal)
 			i = j + 1
 			continue
@@ -792,6 +808,10 @@ static func extract_hierarchy(content_cache: Dictionary, class_to_path: Dictiona
 			if line.begins_with("func "):
 				break
 
+	var declared_to_path := {}
+	for declared_path_any in class_of.keys():
+		declared_to_path[String(class_of[declared_path_any])] = String(declared_path_any)
+
 	var parent_of := {}
 	for key2 in extends_name.keys():
 		var child: String = key2
@@ -809,10 +829,8 @@ static func extract_hierarchy(content_cache: Dictionary, class_to_path: Dictiona
 			if content_cache.has(const_target):
 				parent_of[child] = const_target
 				continue
-		for key3 in class_of.keys():
-			if String(class_of[key3]) == base_name:
-				resolved = String(key3)
-				break
+		if declared_to_path.has(base_name):
+			resolved = String(declared_to_path[base_name])
 		if resolved == "" and class_to_path.has(base_name):
 			resolved = String(class_to_path[base_name])
 		if resolved != "" and resolved != child:
@@ -908,6 +926,7 @@ static func _suffix_agreement(project_path: String, token: String) -> int:
 const PROBE_MIN_LENGTH := 40
 const PROBE_MAX_LENGTH := 300
 const MAX_DUPLICATE_CHECKS := 400
+const MAX_QUOTED_REFERENCE_LENGTH := 4096
 
 
 ## For each orphan, checks whether its content appears verbatim inside a file
@@ -921,23 +940,27 @@ const MAX_DUPLICATE_CHECKS := 400
 ## duplicated inline in X" turns a baffling result into an actionable one.
 static func _find_duplicated_content(
 	orphans: Array, content_cache: Dictionary, seen: Dictionary,
-	progress: Callable = Callable()
+	progress: Callable = Callable(), main_loop = null
 ) -> void:
 	var checked := 0
 	var examined := 0
+	var comparisons := 0
+	# Paint the new phase before beginning the potentially expensive search.
+	if main_loop is SceneTree:
+		await (main_loop as SceneTree).process_frame
 	for entry_any in orphans:
 		if checked >= MAX_DUPLICATE_CHECKS:
-			return
+			break
 		var entry: Dictionary = entry_any
 		var path: String = entry["path"]
 		var content := String(content_cache.get(path, ""))
+		examined += 1
+		if progress.is_valid():
+			progress.call("checking duplicated content", examined, orphans.size())
 		if content == "":
 			continue
 
 		var probe := _pick_probe(content)
-		examined += 1
-		if progress.is_valid() and examined % 5 == 0:
-			progress.call("checking duplicated content", examined, orphans.size())
 		if probe == "":
 			continue
 		checked += 1
@@ -946,9 +969,14 @@ static func _find_duplicated_content(
 			var other: String = key
 			if other == path or not seen.has(other):
 				continue
+			comparisons += 1
+			if comparisons % YIELD_EVERY_N == 0 and main_loop is SceneTree:
+				await (main_loop as SceneTree).process_frame
 			if String(content_cache[other]).find(probe) != -1:
 				entry["duplicated_in"] = other
 				break
+	if progress.is_valid():
+		progress.call("checking duplicated content", mini(examined, orphans.size()), orphans.size())
 
 
 ## Picks the longest reasonably-sized line to fingerprint a file by.

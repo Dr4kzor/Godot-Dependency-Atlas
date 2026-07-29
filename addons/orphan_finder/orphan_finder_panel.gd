@@ -250,17 +250,36 @@ func start_scan() -> void:
 func _on_progress(phase: String, done: int, total: int) -> void:
 	match phase:
 		"inventory":
+			_progress_bar.indeterminate = true
 			_progress_bar.value = 0
 			_status_label.text = "1/4 Building file inventory... %d found" % done
 		"reading":
+			_progress_bar.indeterminate = false
 			_progress_bar.value = 0.0 if total <= 0 else (float(done) / float(total)) * 100.0
 			_status_label.text = "2/4 Reading file contents... %d / %d" % [done, total]
 		"indexing":
+			_progress_bar.indeterminate = false
 			_progress_bar.value = 0.0 if total <= 0 else (float(done) / float(total)) * 100.0
 			_status_label.text = "3/4 Indexing UIDs and class names... %d / %d" % [done, total]
 		"traversing":
-			_status_label.text = "4/4 Following references from entry points... %d file(s) reached" % done
+			_progress_bar.indeterminate = true
+			_status_label.text = "Following references from entry points... %d file(s) reached" % done
+		"mapping orphan links":
+			_progress_bar.indeterminate = total <= 0
+			_progress_bar.value = 0.0 if total <= 0 else (float(done) / float(total)) * 100.0
+			_status_label.text = "Mapping relationships between unused files... %d / %d" % [done, total]
+		"checking duplicated content":
+			_progress_bar.indeterminate = total <= 0
+			_progress_bar.value = 0.0 if total <= 0 else (float(done) / float(total)) * 100.0
+			_status_label.text = "Checking whether unused content was copied elsewhere... %d / %d" % [done, total]
+		"building class hierarchy":
+			_progress_bar.indeterminate = true
+			_status_label.text = "Building class inheritance hierarchy..."
+		"writing report":
+			_progress_bar.indeterminate = true
+			_status_label.text = "Preparing scan results..."
 		_:
+			_progress_bar.indeterminate = total <= 0
 			_status_label.text = "Working... (%s)" % phase
 
 

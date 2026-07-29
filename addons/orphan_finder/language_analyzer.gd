@@ -45,8 +45,8 @@ static func build_symbol_index(contents: Dictionary) -> Dictionary:
 ## for hierarchy placement but still become symbol-reference edges.
 static func declarations(path: String, content: String) -> Array:
 	var ext := path.get_extension().to_lower()
-	if ext == "gd":
-		return [] # the scanner's mature GDScript hierarchy parser owns this
+	if ext == "gd" or not (ext in CSHARP_EXTENSIONS or ext in NATIVE_EXTENSIONS):
+		return [] # the scanner's mature GDScript hierarchy parser owns .gd
 	var clean := strip_comments_and_strings(content, true)
 	var out: Array = []
 	var pattern := ""
@@ -74,6 +74,8 @@ static func references(
 	var found := {}
 	var kinds := {}
 	var ext := path.get_extension().to_lower()
+	if not (ext in SOURCE_EXTENSIONS or is_build_file(path)):
+		return {"files": [], "kinds": {}}
 	var clean := strip_comments_and_strings(content, false)
 
 	if ext in NATIVE_EXTENSIONS:
