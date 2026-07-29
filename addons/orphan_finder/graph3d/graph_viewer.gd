@@ -37,6 +37,7 @@ const DeletionManager = preload("res://addons/orphan_finder/graph3d/deletion_man
 const NamingAffinity = preload("res://addons/orphan_finder/graph3d/naming_affinity.gd")
 const LayoutDiagnostics = preload("res://addons/orphan_finder/graph3d/layout_diagnostics.gd")
 const PermissionDialog = preload("res://addons/orphan_finder/graph3d/permission_dialog.gd")
+const LanguageAnalyzer = preload("res://addons/orphan_finder/language_analyzer.gd")
 
 enum LayoutMode { DEPENDENCY, FOLDER }
 ## Optional overlays, both off by default and both driven from a selection.
@@ -3239,7 +3240,7 @@ func _build_class_index() -> void:
 			))
 			if loop != null:
 				await loop.process_frame
-		if path.get_extension().to_lower() != "gd":
+		if not LanguageAnalyzer.is_source(path):
 			continue
 		var f := FileAccess.open(OrphanScanner._disk_path(path), FileAccess.READ)
 		if f == null:
@@ -3260,6 +3261,11 @@ func _build_class_index() -> void:
 					_class_index[cls] = path
 				break
 			idx = content.find("class_name ", idx + 1)
+		for declaration_any in LanguageAnalyzer.declarations(path, content):
+			var declaration: Dictionary = declaration_any
+			var symbol := String(declaration.get("name", ""))
+			if symbol != "" and not _class_index.has(symbol):
+				_class_index[symbol] = path
 
 
 ## Builds the project-wide weighted link graph: for every script, how many
@@ -3289,7 +3295,10 @@ func _build_link_graph_async() -> void:
 	var loop := get_tree()
 	for i in scripts.size():
 		var path: String = scripts[i]
-		var hits: Dictionary = CodeLinks.analyze(String(_content_cache[path]), _class_index, file_set)
+		var link_content := String(_content_cache[path])
+		if path.get_extension().to_lower() != "gd":
+			link_content = LanguageAnalyzer.strip_comments_and_strings(link_content, true)
+		var hits: Dictionary = CodeLinks.analyze(link_content, _class_index, file_set)
 		var outgoing := {}
 		for key2 in hits.keys():
 			var target: String = key2

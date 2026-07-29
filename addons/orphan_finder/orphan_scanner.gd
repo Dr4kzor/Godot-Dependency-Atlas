@@ -2,6 +2,8 @@
 class_name OrphanScanner
 extends RefCounted
 
+const LanguageAnalyzer = preload("res://addons/orphan_finder/language_analyzer.gd")
+
 ## Finds unreachable ("orphan") files by TRAVERSAL, not by keyword search.
 ##
 ## The approach, in order:
@@ -50,6 +52,10 @@ const READABLE_EXTENSIONS := [
 	# at looked unused too.
 	"ini", "txt", "csv", "tsv", "xml", "yml", "yaml", "toml", "conf",
 	"properties", "md", "po", "pot",
+	# Multi-language source and build files. Filename-only manifests such as
+	# CMakeLists.txt/SConstruct are admitted by LanguageAnalyzer.is_readable.
+	"c", "cc", "cpp", "cxx", "h", "hh", "hpp", "hxx",
+	"csproj", "sln", "props", "targets", "vcxproj", "filters",
 ]
 
 ## Sidecar files owned by another file -- never reported on their own, and
@@ -157,7 +163,7 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 	var readable: Array = []
 	for i in all_files.size():
 		var fp3: String = all_files[i]
-		if fp3.get_extension().to_lower() in READABLE_EXTENSIONS:
+		if fp3.get_extension().to_lower() in READABLE_EXTENSIONS or LanguageAnalyzer.is_readable(fp3):
 			readable.append(fp3)
 
 	if progress.is_valid():
@@ -203,6 +209,14 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 		if main_loop is SceneTree and (i % YIELD_EVERY_N == 0):
 			await (main_loop as SceneTree).process_frame
 
+	# C#/C/C++ declarations share the same symbol map used by the generic
+	# reference pass and by the weighted 3D link analysis.
+	var language_symbols := LanguageAnalyzer.build_symbol_index(content_cache)
+	for symbol_any in language_symbols.keys():
+		var symbol: String = symbol_any
+		if not class_to_path.has(symbol):
+			class_to_path[symbol] = language_symbols[symbol]
+
 	# ---------- 3. TRAVERSE ----------
 	# Walk outward from the entry points. For each file: parse it completely,
 	# record every outgoing reference found into the graph, mark it seen ONLY
@@ -221,6 +235,15 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 	var godot_deps := await godot_dependencies_async(all_files, progress, main_loop)
 
 	var roots := _find_roots(content_cache, file_set)
+	var root_paths := {}
+	for root_any in roots:
+		root_paths[String((root_any as Dictionary)["path"])] = true
+	for build_root_any in LanguageAnalyzer.build_roots(file_set):
+		var build_root: Dictionary = build_root_any
+		var build_path := String(build_root["path"])
+		if not root_paths.has(build_path):
+			root_paths[build_path] = true
+			roots.append(build_root)
 	if roots.is_empty():
 		return {
 			"orphans": [], "roots": [], "dynamic_dirs": [], "graph": {}, "unresolved_refs": [], "log_text": "", "orphan_graph": {}, "hierarchy": {}, "godot_pass_used": false, "godot_dependency_files": 0,
@@ -282,8 +305,10 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 		if content != "":
 			var ext_now := current.get_extension().to_lower()
 			var code_content := ""
-			if ext_now == "gd" or ext_now == "cs":
+			if ext_now == "gd":
 				code_content = _strip_code_noise(content)
+			elif LanguageAnalyzer.is_source(current):
+				code_content = LanguageAnalyzer.strip_comments_and_strings(content, false)
 			var outgoing := _extract_references(
 				content, code_content, file_set, dir_set, uid_to_path, class_to_path,
 				basename_index
@@ -299,6 +324,25 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 					edge_kinds[current][ref_path] = String(kinds[ref_path])
 			for ur in outgoing["unresolved"]:
 				unresolved_refs.append({"in_file": current, "reference": String(ur)})
+			var language_out := LanguageAnalyzer.references(
+				current, content, file_set, basename_index, language_symbols
+			)
+			var language_kinds: Dictionary = language_out["kinds"]
+			for language_ref_any in language_out["files"]:
+				var language_ref: String = language_ref_any
+				if language_ref != current and not found.has(language_ref):
+					found.append(language_ref)
+				if language_kinds.has(language_ref):
+					if not edge_kinds.has(current):
+						edge_kinds[current] = {}
+					edge_kinds[current][language_ref] = String(language_kinds[language_ref])
+			for build_member_any in LanguageAnalyzer.implicit_build_members(current, content, file_set):
+				var build_member: String = build_member_any
+				if build_member != current and not found.has(build_member):
+					found.append(build_member)
+				if not edge_kinds.has(current):
+					edge_kinds[current] = {}
+				edge_kinds[current][build_member] = "build"
 			for dref in outgoing["dirs"]:
 				var dir_path: String = dref
 				var count := 0
@@ -366,8 +410,10 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 			continue
 		var orphan_code := ""
 		var orphan_ext := orphan_path.get_extension().to_lower()
-		if orphan_ext == "gd" or orphan_ext == "cs":
+		if orphan_ext == "gd":
 			orphan_code = _strip_code_noise(orphan_content)
+		elif LanguageAnalyzer.is_source(orphan_path):
+			orphan_code = LanguageAnalyzer.strip_comments_and_strings(orphan_content, false)
 		var orphan_out := _extract_references(
 			orphan_content, orphan_code, file_set, dir_set, uid_to_path,
 			class_to_path, basename_index
@@ -381,6 +427,13 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 			var ref_path: String = r
 			if ref_path != orphan_path and not (ref_path in orphan_refs):
 				orphan_refs.append(ref_path)
+		var orphan_language := LanguageAnalyzer.references(
+			orphan_path, orphan_content, file_set, basename_index, language_symbols
+		)
+		for language_ref_any in orphan_language["files"]:
+			var language_ref: String = language_ref_any
+			if language_ref != orphan_path and not (language_ref in orphan_refs):
+				orphan_refs.append(language_ref)
 		if not orphan_refs.is_empty():
 			orphan_graph[orphan_path] = orphan_refs
 		if progress.is_valid() and orphan_index % 5 == 0:
@@ -398,7 +451,7 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 	var log_text := build_log_text(orphans, roots, dynamic_dirs, graph, unresolved_refs, seen.size(), all_files.size(), truncated, scanning_current_project(), godot_deps.size())
 
 	return {
-		"hierarchy": extract_hierarchy(content_cache, class_to_path),
+		"hierarchy": _combined_hierarchy(content_cache, class_to_path, language_symbols),
 		"orphans": orphans,
 		"godot_pass_used": scanning_current_project(),
 		"godot_dependency_files": godot_deps.size(),
@@ -429,6 +482,12 @@ static func _find_roots(content_cache: Dictionary, file_set: Dictionary) -> Arra
 	var project_cfg := String(content_cache.get("res://project.godot", ""))
 	if project_cfg == "":
 		return roots
+
+	# Project settings themselves own resources such as config/icon and are
+	# therefore part of the live graph, not merely a source of other roots.
+	if file_set.has("res://project.godot"):
+		seen["res://project.godot"] = true
+		roots.append({"path": "res://project.godot", "kind": "project settings"})
 
 	var main_scene := _cfg_value(project_cfg, "run/main_scene")
 	if main_scene != "" and file_set.has(main_scene) and not seen.has(main_scene):
@@ -467,11 +526,23 @@ static func _enabled_plugin_cfgs(project_cfg: String, file_set: Dictionary) -> A
 	var next_section := section.find("\n[", 1)
 	if next_section != -1:
 		section = section.substr(0, next_section)
+	var seen := {}
 	for token in _extract_res_tokens(section):
 		var t: String = token
 		var resolved := _longest_known_prefix(t, file_set)
-		if resolved != "" and resolved.get_file() == "plugin.cfg":
+		if resolved != "" and resolved.get_file() == "plugin.cfg" and not seen.has(resolved):
+			seen[resolved] = true
 			result.append(resolved)
+	# Godot 4 stores enabled plugins by addon id, e.g.
+	# PackedStringArray("node25d-cs"), not by res:// plugin.cfg path.
+	for literal_any in _extract_quoted_literals(section):
+		var plugin_id: String = literal_any
+		if plugin_id.begins_with("res://"):
+			continue
+		var candidate := "res://addons/%s/plugin.cfg" % plugin_id
+		if file_set.has(candidate) and not seen.has(candidate):
+			seen[candidate] = true
+			result.append(candidate)
 	return result
 
 
@@ -608,14 +679,36 @@ static func _extract_quoted_literals(content: String) -> Array:
 	var out: Array = []
 	var i := 0
 	var length := content.length()
+	var in_block_comment := false
 	while i < length:
 		var c: String = content[i]
+		var next := content[i + 1] if i + 1 < length else ""
+		if in_block_comment:
+			if c == "*" and next == "/":
+				in_block_comment = false
+				i += 2
+			else:
+				i += 1
+			continue
+		# GDScript/shell comments and C-family comments. Apostrophes inside a
+		# comment such as "We're" must never open a string and swallow every
+		# relative preload later in the file.
+		if c == "#" or (c == "/" and next == "/"):
+			while i < length and content[i] != "\n":
+				i += 1
+			continue
+		if c == "/" and next == "*":
+			in_block_comment = true
+			i += 2
+			continue
 		if c == "\"" or c == "'":
 			var quote := c
 			var j := i + 1
 			var literal := ""
 			while j < length and content[j] != quote:
 				if content[j] == "\\":
+					if j + 1 < length:
+						literal += content[j + 1]
 					j += 2
 					continue
 				literal += content[j]
@@ -626,7 +719,6 @@ static func _extract_quoted_literals(content: String) -> Array:
 			continue
 		i += 1
 	return out
-
 
 ## filename -> every project file with that filename.
 ## Reads `extends` and `class_name` to recover the code hierarchy.
@@ -710,6 +802,23 @@ static func extract_hierarchy(content_cache: Dictionary, class_to_path: Dictiona
 		if resolved != "" and resolved != child:
 			parent_of[child] = resolved
 
+	return {"parent_of": parent_of, "class_of": class_of}
+
+
+## Merges the established GDScript hierarchy with C#/C/C++ declarations.
+## GDScript wins on overlap because its path/preload resolution is stronger
+## than name-only source parsing.
+static func _combined_hierarchy(
+	content_cache: Dictionary, class_to_path: Dictionary, language_symbols: Dictionary
+) -> Dictionary:
+	var gd := extract_hierarchy(content_cache, class_to_path)
+	var native := LanguageAnalyzer.hierarchy(content_cache, language_symbols)
+	var parent_of: Dictionary = native["parent_of"].duplicate()
+	var class_of: Dictionary = native["class_of"].duplicate()
+	for key_any in (gd["parent_of"] as Dictionary).keys():
+		parent_of[String(key_any)] = gd["parent_of"][key_any]
+	for key_any2 in (gd["class_of"] as Dictionary).keys():
+		class_of[String(key_any2)] = gd["class_of"][key_any2]
 	return {"parent_of": parent_of, "class_of": class_of}
 
 
@@ -1176,8 +1285,13 @@ static func _collect_files_async(dir_path: String, results: Array, progress: Cal
 			entry = dir.get_next()
 			continue
 		if dir.current_is_dir():
-			if not entry in SKIP_DIRS:
-				await _collect_files_async(dir_path.path_join(entry), results, progress, main_loop)
+			var child_dir := dir_path.path_join(entry)
+			# Godot excludes an entire directory containing .gdignore from its
+			# resource filesystem. Mirror that boundary so documentation/source
+			# archives are not presented as deletable runtime orphans.
+			var godot_ignored := FileAccess.file_exists(_disk_path(child_dir.path_join(".gdignore")))
+			if not entry in SKIP_DIRS and not godot_ignored:
+				await _collect_files_async(child_dir, results, progress, main_loop)
 		else:
 			results.append(dir_path.path_join(entry))
 			if progress.is_valid() and results.size() % 25 == 0:

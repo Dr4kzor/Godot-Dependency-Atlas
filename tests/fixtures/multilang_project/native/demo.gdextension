@@ -1,0 +1,4 @@
+[configuration]
+entry_symbol = "demo_library_init"
+[libraries]
+linux.debug.x86_64 = "res://native/bin/libdemo.so"

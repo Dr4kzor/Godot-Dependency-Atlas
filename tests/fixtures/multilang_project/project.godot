@@ -1,0 +1,6 @@
+[application]
+run/main_scene="res://main.tscn"
+config/icon="res://icon.svg"
+
+[editor_plugins]
+enabled=PackedStringArray("audit-plugin")

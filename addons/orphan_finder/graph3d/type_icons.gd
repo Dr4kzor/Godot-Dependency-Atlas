@@ -28,6 +28,9 @@ enum Kind {
 const EXTENSION_KINDS := {
 	"tscn": Kind.SCENE, "scn": Kind.SCENE, "escn": Kind.SCENE,
 	"gd": Kind.SCRIPT, "cs": Kind.SCRIPT, "gdc": Kind.SCRIPT,
+	"c": Kind.SCRIPT, "cc": Kind.SCRIPT, "cpp": Kind.SCRIPT, "cxx": Kind.SCRIPT,
+	"h": Kind.SCRIPT, "hh": Kind.SCRIPT, "hpp": Kind.SCRIPT, "hxx": Kind.SCRIPT,
+	"csproj": Kind.DATA, "sln": Kind.DATA, "vcxproj": Kind.DATA,
 	"gdshader": Kind.SHADER, "gdshaderinc": Kind.SHADER, "shader": Kind.SHADER,
 	"tres": Kind.RESOURCE, "res": Kind.RESOURCE, "material": Kind.RESOURCE,
 	"png": Kind.IMAGE, "jpg": Kind.IMAGE, "jpeg": Kind.IMAGE, "webp": Kind.IMAGE,
