@@ -314,9 +314,12 @@ const EMBED_MARKER_LIFT := 0.68
 const LEFT_PANEL_WIDTH := 300.0
 const RIGHT_PANEL_WIDTH := 420.0
 const PANEL_MIN_WIDTH := 180.0
-## Editable bounds for the resizable top toolbar pane.
-const TOOLBAR_MIN_HEIGHT := 16.0
-const TOOLBAR_MAX_HEIGHT := 64.0
+## Toolbar sizing is exposed on GraphViewer so it can be tuned in the
+## Inspector without fighting child-control minimums.
+@export_range(8.0, 256.0, 1.0) var toolbar_min_height := 24.0
+@export_range(8.0, 512.0, 1.0) var toolbar_max_height := 64.0
+@export_range(8.0, 256.0, 1.0) var toolbar_initial_height := 24.0
+@export var toolbar_show_labels := false
 const TREE_ICON_SIZE := 16    # matches the editor FileSystem dock
 
 # --- icons / selection -------------------------------------------------------
@@ -3827,11 +3830,21 @@ func _build_toolbar() -> void:
 		var binding: Array = bindings[id]
 		var button := get_node(row_path + String(binding[0])) as Button
 		button.tooltip_text = String(binding[1])
+		button.expand_icon = true
+		button.flat = true
+		button.custom_minimum_size = Vector2(24, 0)
+		if not toolbar_show_labels:
+			button.text = ""
 		button.pressed.connect(binding[2] as Callable)
 		_toolbar_buttons[id] = button
 
 	_toolbar_help = get_node(row_path + "Help") as MenuButton
 	_toolbar_help.tooltip_text = "What every toolbar button and shortcut does"
+	_toolbar_help.expand_icon = true
+	_toolbar_help.flat = true
+	_toolbar_help.custom_minimum_size = Vector2(24, 0)
+	if not toolbar_show_labels:
+		_toolbar_help.text = ""
 	_build_toolbar_help()
 	_sync_toolbar_buttons()
 	_apply_toolbar_icons()
@@ -3840,8 +3853,10 @@ func _build_toolbar() -> void:
 func _build_ui() -> void:
 	var main_split := $UI/Layout/MainSplit as VSplitContainer
 	var toolbar_panel := $UI/Layout/MainSplit/ToolbarPanel as PanelContainer
-	toolbar_panel.custom_minimum_size.y = TOOLBAR_MIN_HEIGHT
-	main_split.split_offset = int(TOOLBAR_MIN_HEIGHT)
+	var minimum := maxf(toolbar_min_height, 8.0)
+	var maximum := maxf(toolbar_max_height, minimum)
+	toolbar_panel.custom_minimum_size.y = minimum
+	main_split.split_offset = int(clampf(toolbar_initial_height, minimum, maximum))
 	main_split.dragged.connect(_on_toolbar_split_dragged)
 
 	_root_split = $UI/Layout/MainSplit/ContentRoot/RootSplit
@@ -3973,7 +3988,9 @@ func _build_ui() -> void:
 
 
 func _on_toolbar_split_dragged(offset: int) -> void:
-	var clamped := clampi(offset, int(TOOLBAR_MIN_HEIGHT), int(TOOLBAR_MAX_HEIGHT))
+	var minimum := int(maxf(toolbar_min_height, 8.0))
+	var maximum := int(maxf(toolbar_max_height, float(minimum)))
+	var clamped := clampi(offset, minimum, maximum)
 	if clamped != offset:
 		($UI/Layout/MainSplit as VSplitContainer).split_offset = clamped
 

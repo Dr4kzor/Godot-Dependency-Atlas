@@ -32,62 +32,72 @@ vertical_scroll_mode = 0
 [node name="ToolbarRow" type="HBoxContainer" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll" unique_id=636075714]
 layout_mode = 2
 size_flags_horizontal = 3
+size_flags_vertical = 3
 
 [node name="Layout" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=800888449]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 toggle_mode = true
 text = "Tree"
 
 [node name="Sidecars" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=1362607704]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 toggle_mode = true
 text = "Side"
 
 [node name="Heat" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=2125079518]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 toggle_mode = true
 text = "Heat"
 
 [node name="Pair" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=2066075521]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 toggle_mode = true
 text = "Pair"
 
 [node name="Connections" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=295043485]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 text = "Lines"
 
 [node name="Sep1" type="VSeparator" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=1956771585]
 custom_minimum_size = Vector2(5, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 
 [node name="Isolate" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=574568277]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 toggle_mode = true
 text = "Isolate"
 
 [node name="Inline" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=943667078]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 toggle_mode = true
 text = "Inline"
 
 [node name="Gather" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=779366360]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 toggle_mode = true
 text = "Gather"
@@ -95,24 +105,28 @@ text = "Gather"
 [node name="Sep2" type="VSeparator" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=1703983550]
 custom_minimum_size = Vector2(5, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 
 [node name="Weight" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=1053841928]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 toggle_mode = true
 text = "Weight"
 
 [node name="Pull" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=1653880845]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 toggle_mode = true
 text = "Pull"
 
 [node name="Group" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=684856600]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 toggle_mode = true
 text = "Groups"
@@ -120,72 +134,84 @@ text = "Groups"
 [node name="Sep3" type="VSeparator" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=126374573]
 custom_minimum_size = Vector2(5, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 
 [node name="Labels" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=659388861]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 toggle_mode = true
 text = "Labels"
 
 [node name="LabelCull" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=533901513]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 toggle_mode = true
 text = "Cull"
 
 [node name="Filter" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=803448921]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 text = "Filter"
 
 [node name="Visibility" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=228740473]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 text = "Hide"
 
 [node name="Sep4" type="VSeparator" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=1383701105]
 custom_minimum_size = Vector2(5, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 
 [node name="Home" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=829391913]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 text = "Home"
 
 [node name="Clear" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=1021627427]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 text = "Clear"
 
 [node name="Files" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=1557348321]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 toggle_mode = true
 text = "Files"
 
 [node name="Info" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=290148102]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 toggle_mode = true
 text = "Info"
 
 [node name="Panels" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=1923290259]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 text = "Open"
 
 [node name="Help" type="MenuButton" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=921148662]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
+size_flags_horizontal = 3
 focus_mode = 0
 text = "Help"
 
