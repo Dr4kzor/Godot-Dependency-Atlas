@@ -314,6 +314,9 @@ const EMBED_MARKER_LIFT := 0.68
 const LEFT_PANEL_WIDTH := 300.0
 const RIGHT_PANEL_WIDTH := 420.0
 const PANEL_MIN_WIDTH := 180.0
+## Editable bounds for the resizable top toolbar pane.
+const TOOLBAR_MIN_HEIGHT := 16.0
+const TOOLBAR_MAX_HEIGHT := 64.0
 const TREE_ICON_SIZE := 16    # matches the editor FileSystem dock
 
 # --- icons / selection -------------------------------------------------------
@@ -3795,267 +3798,109 @@ func _build_toolbar_help() -> void:
 
 
 func _build_toolbar() -> void:
-	var frame := PanelContainer.new()
-	frame.mouse_filter = Control.MOUSE_FILTER_STOP
-	_top_bar.add_child(frame)
+	var row_path := "UI/Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow/"
+	var bindings := {
+		"layout": ["Layout", "Switch dependency/folder layout (G)", _send_toolbar_shortcut.bind(KEY_G)],
+		"sidecars": ["Sidecars", "Show .import and .uid sidecars (I)", _send_toolbar_shortcut.bind(KEY_I)],
+		"heat": ["Heat", "Entanglement heat colouring (H)", _send_toolbar_shortcut.bind(KEY_H)],
+		"pair": ["Pair", "Pair scripts with their owning scenes (P)", _send_toolbar_shortcut.bind(KEY_P)],
+		"connections": ["Connections", "Cycle connection rendering (T)", _send_toolbar_shortcut.bind(KEY_T)],
+		"isolate": ["Isolate", "Show selection and direct neighbours only (O)", _send_toolbar_shortcut.bind(KEY_O)],
+		"inline": ["Inline", "Show inlined-copy links (U)", _send_toolbar_shortcut.bind(KEY_U)],
+		"gather": ["Gather", "Gather direct relations around selection (R)", _send_toolbar_shortcut.bind(KEY_R)],
+		"weight": ["Weight", "Weight-aware layout (B)", _send_toolbar_shortcut.bind(KEY_B)],
+		"pull": ["Pull", "Pull nodes toward their references (Y)", _send_toolbar_shortcut.bind(KEY_Y)],
+		"group": ["Group", "Group related naming families (J)", _send_toolbar_shortcut.bind(KEY_J)],
+		"labels": ["Labels", "Minimum size for all labels (M)", _send_toolbar_shortcut.bind(KEY_M)],
+		"label_cull": ["LabelCull", "Hide distant labels (L)", _send_toolbar_shortcut.bind(KEY_L)],
+		"filter": ["Filter", "Remove types from analysis and layout (K)", _open_filter_window],
+		"visibility": ["Visibility", "Hide types visually without changing analysis", _open_visibility_window],
+		"home": ["Home", "Return camera to its starting view (F / Home)", _go_home],
+		"clear": ["Clear", "Clear path/change-impact analysis (C)", _send_toolbar_shortcut.bind(KEY_C)],
+		"files": ["Files", "Show or hide Project Files panel (F1)", _send_toolbar_shortcut.bind(KEY_F1)],
+		"info": ["Info", "Show or hide Selection panel (F2)", _send_toolbar_shortcut.bind(KEY_F2)],
+		"panels": ["Panels", "Scan another Godot project (F3)", _open_project_dialog],
+	}
+	_toolbar_buttons.clear()
+	for id_any in bindings:
+		var id := String(id_any)
+		var binding: Array = bindings[id]
+		var button := get_node(row_path + String(binding[0])) as Button
+		button.tooltip_text = String(binding[1])
+		button.pressed.connect(binding[2] as Callable)
+		_toolbar_buttons[id] = button
 
-	var scroll := ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.custom_minimum_size.y = 38
-	frame.add_child(scroll)
-
-	var row := HBoxContainer.new()
-	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(row)
-
-	_add_toolbar_button(row, "layout", "Tree", "Switch dependency/folder layout (G)", _send_toolbar_shortcut.bind(KEY_G), true)
-	_add_toolbar_button(row, "sidecars", "Side", "Show .import and .uid sidecars (I)", _send_toolbar_shortcut.bind(KEY_I), true)
-	_add_toolbar_button(row, "heat", "Heat", "Entanglement heat colouring (H)", _send_toolbar_shortcut.bind(KEY_H), true)
-	_add_toolbar_button(row, "pair", "Pair", "Pair scripts with their owning scenes (P)", _send_toolbar_shortcut.bind(KEY_P), true)
-	_add_toolbar_button(row, "connections", "Lines", "Cycle connection rendering (T)", _send_toolbar_shortcut.bind(KEY_T))
-	_add_toolbar_separator(row)
-	_add_toolbar_button(row, "isolate", "Isolate", "Show selection and direct neighbours only (O)", _send_toolbar_shortcut.bind(KEY_O), true)
-	_add_toolbar_button(row, "inline", "Inline", "Show inlined-copy links (U)", _send_toolbar_shortcut.bind(KEY_U), true)
-	_add_toolbar_button(row, "gather", "Gather", "Gather direct relations around selection (R)", _send_toolbar_shortcut.bind(KEY_R), true)
-	_add_toolbar_separator(row)
-	_add_toolbar_button(row, "weight", "Weight", "Weight-aware layout (B)", _send_toolbar_shortcut.bind(KEY_B), true)
-	_add_toolbar_button(row, "pull", "Pull", "Pull nodes toward their references (Y)", _send_toolbar_shortcut.bind(KEY_Y), true)
-	_add_toolbar_button(row, "group", "Groups", "Group related naming families (J)", _send_toolbar_shortcut.bind(KEY_J), true)
-	_add_toolbar_separator(row)
-	_add_toolbar_button(row, "labels", "Labels", "Minimum size for all labels (M)", _send_toolbar_shortcut.bind(KEY_M), true)
-	_add_toolbar_button(row, "label_cull", "Cull", "Hide distant labels (L)", _send_toolbar_shortcut.bind(KEY_L), true)
-	_add_toolbar_button(row, "filter", "Filter", "Remove types from analysis and layout (K)", _open_filter_window)
-	_add_toolbar_button(row, "visibility", "Hide", "Hide types visually without changing analysis", _open_visibility_window)
-	_add_toolbar_separator(row)
-	_add_toolbar_button(row, "home", "Home", "Return camera to its starting view (F / Home)", _go_home)
-	_add_toolbar_button(row, "clear", "Clear", "Clear path/change-impact analysis (C)", _send_toolbar_shortcut.bind(KEY_C))
-	_add_toolbar_button(row, "files", "Files", "Show or hide Project Files panel (F1)", _send_toolbar_shortcut.bind(KEY_F1), true)
-	_add_toolbar_button(row, "info", "Info", "Show or hide Selection panel (F2)", _send_toolbar_shortcut.bind(KEY_F2), true)
-	_add_toolbar_button(row, "panels", "Open", "Scan another Godot project (F3)", _open_project_dialog)
-
-	_toolbar_help = MenuButton.new()
-	_toolbar_help.text = "Help"
+	_toolbar_help = get_node(row_path + "Help") as MenuButton
 	_toolbar_help.tooltip_text = "What every toolbar button and shortcut does"
-	_toolbar_help.focus_mode = Control.FOCUS_NONE
-	_toolbar_help.custom_minimum_size.y = 34
-	row.add_child(_toolbar_help)
 	_build_toolbar_help()
 	_sync_toolbar_buttons()
 	_apply_toolbar_icons()
 
 
 func _build_ui() -> void:
-	var layer := CanvasLayer.new()
-	add_child(layer)
+	var main_split := $UI/Layout/MainSplit as VSplitContainer
+	var toolbar_panel := $UI/Layout/MainSplit/ToolbarPanel as PanelContainer
+	toolbar_panel.custom_minimum_size.y = TOOLBAR_MIN_HEIGHT
+	main_split.split_offset = int(TOOLBAR_MIN_HEIGHT)
+	main_split.dragged.connect(_on_toolbar_split_dragged)
 
-	# Nested split containers, which is Godot's own mechanism for resizable
-	# docks -- the outer split owns the left panel, and its second half is
-	# another split holding a transparent spacer and the right panel. Dragging
-	# either divider works for free, and hiding a panel makes the split give
-	# its space to the other side automatically.
-	#
-	# Both splits are MOUSE_FILTER_PASS so clicks anywhere but a divider fall
-	# through to the 3D view; the spacer is IGNORE so it never intercepts.
-	_root_split = HSplitContainer.new()
-	_root_split.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_root_split.mouse_filter = Control.MOUSE_FILTER_PASS
-	layer.add_child(_root_split)
+	_root_split = $UI/Layout/MainSplit/ContentRoot/RootSplit
+	_left_panel = $UI/Layout/MainSplit/ContentRoot/RootSplit/LeftPanel
+	_inner_split = $UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit
+	_viewport_spacer = $UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/ViewportSpacer
+	_right_panel = $UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/RightPanel
+	_top_bar = $UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/ViewportSpacer/StatusOverlay
+	_status_label = $UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/ViewportSpacer/StatusOverlay/Status
+	_help_label = $UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/ViewportSpacer/StatusOverlay/CameraHelp
+	_file_filter = $UI/Layout/MainSplit/ContentRoot/RootSplit/LeftPanel/LeftBox/FileFilter
+	_file_tree = $UI/Layout/MainSplit/ContentRoot/RootSplit/LeftPanel/LeftBox/FileTree
+	_info_label = $UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/RightPanel/RightBox/Scroll/ScrollBox/Info
+	_cycles_label = $UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/RightPanel/RightBox/Scroll/ScrollBox/Cycles
+	_left_show_button = $UI/Layout/MainSplit/ContentRoot/LeftShow
+	_right_show_button = $UI/Layout/MainSplit/ContentRoot/RightShow
+	_progress_overlay = $UI/Layout/MainSplit/ContentRoot/Progress
+	_toast_label = $UI/Layout/MainSplit/ContentRoot/Toast
 
-	# --- left: read-only project tree ---------------------------------------
-	_left_panel = PanelContainer.new()
-	_left_panel.custom_minimum_size = Vector2(PANEL_MIN_WIDTH, 0)
-	_root_split.add_child(_left_panel)
-
-	var left_box := VBoxContainer.new()
-	_left_panel.add_child(left_box)
-
-	var left_header := HBoxContainer.new()
-	left_box.add_child(left_header)
-	var left_title := Label.new()
-	left_title.text = "Project Files"
-	left_title.tooltip_text = "Read-only view. Click highlights in 3D, double-click flies to it, right-click or long-press can reveal in your file manager. Nothing here can modify files."
-	left_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	left_header.add_child(left_title)
-
-	var visibility_button := Button.new()
-	visibility_button.text = "Visibility"
-	visibility_button.tooltip_text = "Temporarily hide file types without changing analysis or layout"
-	visibility_button.pressed.connect(_open_visibility_window)
-	left_header.add_child(visibility_button)
-
-	var filter_button := Button.new()
-	filter_button.text = "Filters"
-	filter_button.tooltip_text = "Hide file kinds or individual extensions, and add custom ones (K)"
-	filter_button.pressed.connect(_open_filter_window)
-	left_header.add_child(filter_button)
-
-	var open_button := Button.new()
-	open_button.text = "Open…"
-	open_button.tooltip_text = "Scan a different Godot project (F3)"
-	open_button.pressed.connect(_open_project_dialog)
-	left_header.add_child(open_button)
-
-	var left_hide := Button.new()
-	left_hide.text = "X"
-	left_hide.tooltip_text = "Hide (F1)"
-	left_hide.pressed.connect(func(): _set_left_visible(false))
-	left_header.add_child(left_hide)
-
-	_file_filter = LineEdit.new()
-	_file_filter.placeholder_text = "Filter files"
-	_file_filter.clear_button_enabled = true
-	_file_filter.text_changed.connect(_on_filter_changed)
-	left_box.add_child(_file_filter)
-
-	_file_tree = Tree.new()
+	_left_panel.custom_minimum_size.x = PANEL_MIN_WIDTH
+	_right_panel.custom_minimum_size.x = PANEL_MIN_WIDTH
 	_file_tree.hide_root = false
-	_file_tree.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_file_tree.allow_rmb_select = true
-	# Deliberately never made editable: this view can select and reveal, and
-	# has no path to renaming, moving or deleting anything.
+	_outline_overlay(_status_label)
+	_outline_overlay(_help_label)
+	_outline_overlay(_progress_overlay)
+	_outline_overlay(_toast_label)
+	_outline_overlay($UI/Layout/MainSplit/ContentRoot/Crosshair)
+	_status_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
+	_help_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
+	_progress_overlay.add_theme_font_size_override("font_size", 20)
+	_toast_label.add_theme_font_size_override("font_size", 18)
+	$UI/Layout/MainSplit/ContentRoot/Crosshair.add_theme_color_override("font_color", Color(1, 1, 1, 0.7))
+
+	$UI/Layout/MainSplit/ContentRoot/RootSplit/LeftPanel/LeftBox/Header/Visibility.pressed.connect(_open_visibility_window)
+	$UI/Layout/MainSplit/ContentRoot/RootSplit/LeftPanel/LeftBox/Header/Filters.pressed.connect(_open_filter_window)
+	$UI/Layout/MainSplit/ContentRoot/RootSplit/LeftPanel/LeftBox/Header/Open.pressed.connect(_open_project_dialog)
+	$UI/Layout/MainSplit/ContentRoot/RootSplit/LeftPanel/LeftBox/Header/Hide.pressed.connect(func(): _set_left_visible(false))
+	_file_filter.text_changed.connect(_on_filter_changed)
 	_file_tree.item_selected.connect(_on_file_tree_selected)
 	_file_tree.item_activated.connect(_on_file_tree_activated)
 	_file_tree.item_mouse_selected.connect(_on_file_tree_rmb)
 	_file_tree.gui_input.connect(_on_file_tree_gui_input)
-	left_box.add_child(_file_tree)
-
-	# --- middle + right ------------------------------------------------------
-	_inner_split = HSplitContainer.new()
-	_inner_split.mouse_filter = Control.MOUSE_FILTER_PASS
-	_root_split.add_child(_inner_split)
-
-	# Empty and click-through: it exists only to reserve the gap the 3D view
-	# shows through, and to give the top bar something to sit inside so it
-	# reflows when either panel is resized.
-	_viewport_spacer = Control.new()
-	_viewport_spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_viewport_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_inner_split.add_child(_viewport_spacer)
-
-	_top_bar = VBoxContainer.new()
-	_top_bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	_top_bar.offset_left = 10
-	_top_bar.offset_right = -10
-	_top_bar.offset_top = 8
-	_top_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_viewport_spacer.add_child(_top_bar)
-
-	_status_label = Label.new()
-	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD
-	_status_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
-	_status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_outline_overlay(_status_label)
-	_top_bar.add_child(_status_label)
+	_info_label.meta_clicked.connect(_on_info_link_clicked)
+	_cycles_label.meta_clicked.connect(_on_info_link_clicked)
+	$UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/RightPanel/RightBox/Header/Hide.pressed.connect(func(): _set_right_visible(false))
+	$UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/RightPanel/RightBox/Scroll/ScrollBox/CyclesToggle.toggled.connect(
+		func(on: bool): _cycles_label.visible = on
+	)
+	$UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/RightPanel/RightBox/Scroll/ScrollBox/Legend.pressed.connect(_open_legend_window)
+	$UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/RightPanel/RightBox/Scroll/ScrollBox/NodePalette.pressed.connect(_open_node_palette)
+	$UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/RightPanel/RightBox/Scroll/ScrollBox/ConnectionPalette.pressed.connect(_open_connection_palette)
+	$UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/RightPanel/RightBox/LogRow/Diagnose.pressed.connect(_open_diagnostics)
+	$UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/RightPanel/RightBox/LogRow/Reset.pressed.connect(_go_home)
+	$UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/RightPanel/RightBox/LogRow/SaveLog.pressed.connect(_on_save_log)
+	$UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/RightPanel/RightBox/LogRow/SaveAs.pressed.connect(_on_save_log_as)
+	_left_show_button.pressed.connect(func(): _set_left_visible(true))
+	_right_show_button.pressed.connect(func(): _set_right_visible(true))
 
 	_build_toolbar()
-
-	_help_label = Label.new()
-	_help_label.autowrap_mode = TextServer.AUTOWRAP_WORD
-	_help_label.text = "WASD + mouse = fly | Q/E = down/up | Shift = boost | Wheel = speed | Esc = release mouse | Hover a toolbar button or open Help for details"
-	_help_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
-	_help_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_outline_overlay(_help_label)
-	_top_bar.add_child(_help_label)
-
-	_right_panel = PanelContainer.new()
-	_right_panel.custom_minimum_size = Vector2(PANEL_MIN_WIDTH, 0)
-	_inner_split.add_child(_right_panel)
-
-	var right_box := VBoxContainer.new()
-	_right_panel.add_child(right_box)
-
-	var right_header := HBoxContainer.new()
-	right_box.add_child(right_header)
-	var right_title := Label.new()
-	right_title.text = "Selection"
-	right_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	right_header.add_child(right_title)
-	var right_hide := Button.new()
-	right_hide.text = "X"
-	right_hide.tooltip_text = "Hide (F2)"
-	right_hide.pressed.connect(func(): _set_right_visible(false))
-	right_header.add_child(right_hide)
-
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	right_box.add_child(scroll)
-
-	_info_label = RichTextLabel.new()
-	_info_label.bbcode_enabled = true
-	_info_label.fit_content = true
-	_info_label.selection_enabled = true
-	_info_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_info_label.text = "[color=#8a8f99]Nothing selected.\n\nClick a node in the 3D view, or a file on the left.[/color]"
-	# References in the info text are [url] tags, so the panel doubles as a
-	# navigator: clicking one jumps the view to that file.
-	_info_label.meta_clicked.connect(_on_info_link_clicked)
-
-	var scroll_box := VBoxContainer.new()
-	scroll_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(scroll_box)
-	scroll_box.add_child(_info_label)
-
-	scroll_box.add_child(HSeparator.new())
-	var cycles_toggle := Button.new()
-	cycles_toggle.text = "Dependency cycles"
-	cycles_toggle.toggle_mode = true
-	scroll_box.add_child(cycles_toggle)
-
-	_cycles_label = RichTextLabel.new()
-	_cycles_label.bbcode_enabled = true
-	_cycles_label.fit_content = true
-	_cycles_label.visible = false
-	_cycles_label.meta_clicked.connect(_on_info_link_clicked)
-	scroll_box.add_child(_cycles_label)
-	cycles_toggle.toggled.connect(func(on: bool): _cycles_label.visible = on)
-
-	scroll_box.add_child(HSeparator.new())
-	var legend_toggle := Button.new()
-	legend_toggle.text = "Colour legend…"
-	legend_toggle.pressed.connect(_open_legend_window)
-	scroll_box.add_child(legend_toggle)
-
-	var node_palette_button := Button.new()
-	node_palette_button.text = "Node colours & theme…"
-	node_palette_button.pressed.connect(_open_node_palette)
-	scroll_box.add_child(node_palette_button)
-
-	var connection_palette_button := Button.new()
-	connection_palette_button.text = "Connection colours & theme…"
-	connection_palette_button.tooltip_text = "Themed separately from the nodes, so the two can be combined"
-	connection_palette_button.pressed.connect(_open_connection_palette)
-	scroll_box.add_child(connection_palette_button)
-
-	right_box.add_child(HSeparator.new())
-	var log_row := HBoxContainer.new()
-	right_box.add_child(log_row)
-
-	var diagnose := Button.new()
-	diagnose.text = "Diagnose layout…"
-	diagnose.tooltip_text = "Write a report explaining where a file was placed and why"
-	diagnose.pressed.connect(_open_diagnostics)
-	log_row.add_child(diagnose)
-
-	var reset_view := Button.new()
-	reset_view.text = "Reset view"
-	reset_view.tooltip_text = "Fly back to the starting position (F or Home)"
-	reset_view.pressed.connect(_go_home)
-	log_row.add_child(reset_view)
-
-	var save_log := Button.new()
-	save_log.text = "Save log"
-	save_log.tooltip_text = "Write this scan's report into the scanned project's orphan_finder/logs folder"
-	save_log.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	save_log.pressed.connect(_on_save_log)
-	log_row.add_child(save_log)
-
-	var save_as := Button.new()
-	save_as.text = "Save as…"
-	save_as.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	save_as.pressed.connect(_on_save_log_as)
-	log_row.add_child(save_as)
 
 	_save_dialog = FileDialog.new()
 	_save_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
@@ -4064,7 +3909,6 @@ func _build_ui() -> void:
 	_save_dialog.file_selected.connect(_on_save_log_path_chosen)
 	add_child(_save_dialog)
 
-	# --- popups and windows --------------------------------------------------
 	_file_menu = PopupMenu.new()
 	_file_menu.add_item("Highlight in 3D view", 0)
 	_file_menu.add_item("Fly to it", 1)
@@ -4076,11 +3920,11 @@ func _build_ui() -> void:
 	_file_menu.add_item("Reveal in file manager", 2)
 	_file_menu.add_item("Move to trash…", 6)
 	_file_menu.id_pressed.connect(_on_file_menu)
-	layer.add_child(_file_menu)
+	$UI.add_child(_file_menu)
 
 	_node_menu = PopupMenu.new()
 	_node_menu.id_pressed.connect(_on_node_menu)
-	layer.add_child(_node_menu)
+	$UI.add_child(_node_menu)
 
 	_filter_window = FilterWindow.new()
 	_filter_window.set_presentation("Filters", "Unchecked items are removed from the graph entirely, which also simplifies the layout.")
@@ -4124,76 +3968,14 @@ func _build_ui() -> void:
 	_open_dialog.dir_selected.connect(_on_project_chosen)
 	add_child(_open_dialog)
 
-	# --- reopen buttons, shown only while a panel is hidden ------------------
-	_left_show_button = Button.new()
-	_left_show_button.text = "Files >"
-	_left_show_button.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	_left_show_button.offset_left = 8
-	_left_show_button.offset_top = 8
-	_left_show_button.pressed.connect(func(): _set_left_visible(true))
-	_left_show_button.visible = false
-	layer.add_child(_left_show_button)
-
-	_right_show_button = Button.new()
-	_right_show_button.text = "< Info"
-	_right_show_button.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	_right_show_button.offset_left = -80
-	_right_show_button.offset_right = -8
-	_right_show_button.offset_top = 8
-	_right_show_button.pressed.connect(func(): _set_right_visible(true))
-	_right_show_button.visible = false
-	layer.add_child(_right_show_button)
-
-	# --- screen-centred overlays --------------------------------------------
-	# These stay on the CanvasLayer rather than inside the spacer: the 3D
-	# camera renders to the whole viewport, so the crosshair has to sit at the
-	# true screen centre to line up with the ray that picking casts.
-	_progress_overlay = Label.new()
-	_progress_overlay.set_anchors_preset(Control.PRESET_CENTER)
-	_progress_overlay.offset_left = -260
-	_progress_overlay.offset_right = 260
-	_progress_overlay.offset_top = 24
-	_progress_overlay.offset_bottom = 64
-	_progress_overlay.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_progress_overlay.add_theme_font_size_override("font_size", 20)
-	_progress_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_progress_overlay.visible = false
-	_outline_overlay(_progress_overlay)
-	layer.add_child(_progress_overlay)
-
-	_toast_label = Label.new()
-	_toast_label.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	_toast_label.offset_top = -90
-	_toast_label.offset_left = -300
-	_toast_label.offset_right = 300
-	_toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_toast_label.add_theme_font_size_override("font_size", 18)
-	_toast_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_toast_label.modulate = Color(1, 1, 1, 0)
-	_outline_overlay(_toast_label)
-	layer.add_child(_toast_label)
-
-	# PRESET_CENTER zeroes the offsets, leaving a zero-sized rect AT the centre
-	# point -- so the glyph draws rightward and downward from it, and the
-	# visible crosshair ends up below and right of the true centre the ray is
-	# cast through. An explicit centred rect with centred alignment is what
-	# actually puts the marker where the ray goes.
-	var crosshair := Label.new()
-	crosshair.text = "+"
-	crosshair.add_theme_color_override("font_color", Color(1, 1, 1, 0.7))
-	crosshair.set_anchors_preset(Control.PRESET_CENTER)
-	crosshair.offset_left = -CROSSHAIR_HALF
-	crosshair.offset_top = -CROSSHAIR_HALF
-	crosshair.offset_right = CROSSHAIR_HALF
-	crosshair.offset_bottom = CROSSHAIR_HALF
-	crosshair.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	crosshair.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	crosshair.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_outline_overlay(crosshair)
-	layer.add_child(crosshair)
-
 	_root_split.split_offset = int(LEFT_PANEL_WIDTH)
 	call_deferred("_apply_initial_split")
+
+
+func _on_toolbar_split_dragged(offset: int) -> void:
+	var clamped := clampi(offset, int(TOOLBAR_MIN_HEIGHT), int(TOOLBAR_MAX_HEIGHT))
+	if clamped != offset:
+		($UI/Layout/MainSplit as VSplitContainer).split_offset = clamped
 
 
 ## The inner split's position depends on the viewport width, which isn't known
