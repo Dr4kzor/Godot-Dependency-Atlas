@@ -453,7 +453,8 @@ var _press_consumed := false
 var _tree_press_time := 0.0
 var _tree_press_active := false
 var _tree_press_consumed := false
-var _orphans_expanded := false
+var _lone_orphans_expanded := false
+var _cluster_orphans_expanded := false
 ## On by default: an orphan whose code is running from an inlined copy is the
 ## least obvious and most consequential case the tool finds, and hiding the
 ## link that explains it made it easy to mistake for ordinary dead code.
@@ -1984,13 +1985,12 @@ func _place_orphan_grid() -> void:
 	# both easier to judge.
 	var cluster_y := plain_y
 	var lone_y := plain_y - LAYER_HEIGHT * ORPHAN_TIER_DROP
-	if _orphans_expanded:
-		if not clustered.is_empty():
-			_layout_orphan_forest(clustered, base_x, start_z, cluster_y)
-			_centre_orphans_on(clustered, anchor)
-		if not lone.is_empty():
-			_layout_orphan_forest(lone, base_x, start_z, lone_y)
-			_centre_orphans_on(lone, anchor)
+	if _cluster_orphans_expanded and not clustered.is_empty():
+		_layout_orphan_forest(clustered, base_x, start_z, cluster_y)
+		_centre_orphans_on(clustered, anchor)
+	if _lone_orphans_expanded and not lone.is_empty():
+		_layout_orphan_forest(lone, base_x, start_z, lone_y)
+		_centre_orphans_on(lone, anchor)
 
 	# Side by side, so which marker holds what is obvious before expanding.
 	if not clustered.is_empty():
@@ -2473,9 +2473,13 @@ func _build_nodes() -> void:
 			var counts := _orphan_groups()
 			var split := _split_lone_and_clustered(counts["plain"])
 			var group: Array = split["lone"] if path == ORPHAN_HUB else split["clustered"]
+			var expanded := (
+				_lone_orphans_expanded if path == ORPHAN_HUB
+				else _cluster_orphans_expanded
+			)
 			label.text = "%s (%d) — click to %s" % [
 				"Lone orphans" if path == ORPHAN_HUB else "Orphan clusters",
-				group.size(), "hide" if _orphans_expanded else "show"
+				group.size(), "hide" if expanded else "show"
 			]
 		else:
 			# Proxies carry the same name as the file they stand for.
@@ -5786,11 +5790,20 @@ func _unhandled_input(event: InputEvent) -> void:
 		_analysis_edges.clear()
 		_analysis_paths.clear()
 	if hit == ORPHAN_HUB or hit == CLUSTER_HUB:
-		_orphans_expanded = not _orphans_expanded
+		var expanded: bool
+		var group_name: String
+		if hit == ORPHAN_HUB:
+			_lone_orphans_expanded = not _lone_orphans_expanded
+			expanded = _lone_orphans_expanded
+			group_name = "Lone orphans"
+		else:
+			_cluster_orphans_expanded = not _cluster_orphans_expanded
+			expanded = _cluster_orphans_expanded
+			group_name = "Orphan clusters"
 		_selected = ""
 		_update_info()
 		_rebuild_all(false)
-		_show_toast("Orphans: %s" % ("shown" if _orphans_expanded else "hidden"))
+		_show_toast("%s: %s" % [group_name, "shown" if expanded else "hidden"])
 		return
 	_selected = "" if hit == _selected else hit
 	_update_gather_for_selection()
