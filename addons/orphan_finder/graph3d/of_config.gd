@@ -17,6 +17,9 @@ extends RefCounted
 const DATA_DIR_NAME := "orphan_finder"
 const CONFIG_NAME := "orphan-finder.config"
 const LOG_DIR_NAME := "logs"
+const CUSTOM_THEMES_DIR_NAME := "custom_themes"
+const DEFAULT_IDLE_CONNECTION_ALPHA := 0.06
+const DEFAULT_SELECTED_CONNECTION_ALPHA := 1.0
 
 const GITIGNORE_BODY := """# Orphan Finder
 # Scan reports are machine-local and change on every run, so they are not
@@ -44,6 +47,10 @@ static func log_dir(root: String) -> String:
 	return _join(data_dir(root), LOG_DIR_NAME)
 
 
+static func custom_themes_dir(root: String) -> String:
+	return _join(data_dir(root), CUSTOM_THEMES_DIR_NAME)
+
+
 static func _join(base: String, leaf: String) -> String:
 	if base.ends_with("/"):
 		return base + leaf
@@ -60,6 +67,9 @@ static func ensure_layout(root: String) -> String:
 	var logs := log_dir(root)
 	if not DirAccess.dir_exists_absolute(logs):
 		DirAccess.make_dir_recursive_absolute(logs)
+	var themes := custom_themes_dir(root)
+	if not DirAccess.dir_exists_absolute(themes):
+		DirAccess.make_dir_recursive_absolute(themes)
 
 	var ignore_path := _join(dir, ".gitignore")
 	if not FileAccess.file_exists(ignore_path):
@@ -80,6 +90,8 @@ static func default_settings() -> Dictionary:
 		"view_hidden_extensions": [],
 		"theme": "godot_dark",
 		"connection_theme": "godot_dark",
+		"idle_connection_alpha": DEFAULT_IDLE_CONNECTION_ALPHA,
+		"selected_connection_alpha": DEFAULT_SELECTED_CONNECTION_ALPHA,
 		"colour_overrides": {},
 		"gather_relations": false,
 		"show_embed_links": true,
@@ -104,6 +116,12 @@ static func load_settings(root: String) -> Dictionary:
 	settings["view_hidden_extensions"] = Array(cfg.get_value("visibility", "hidden_extensions", []))
 	settings["theme"] = String(cfg.get_value("display", "theme", "godot_dark"))
 	settings["connection_theme"] = String(cfg.get_value("display", "connection_theme", "godot_dark"))
+	settings["idle_connection_alpha"] = clampf(float(cfg.get_value(
+		"display", "idle_connection_alpha", DEFAULT_IDLE_CONNECTION_ALPHA
+	)), 0.0, 1.0)
+	settings["selected_connection_alpha"] = clampf(float(cfg.get_value(
+		"display", "selected_connection_alpha", DEFAULT_SELECTED_CONNECTION_ALPHA
+	)), 0.0, 1.0)
 	# Stored flat ("scope/theme/key" -> Color) because nested dictionaries do
 	# not survive a ConfigFile round-trip reliably.
 	settings["colour_overrides"] = Dictionary(cfg.get_value("display", "colour_overrides", {}))
@@ -125,6 +143,12 @@ static func save_settings(root: String, settings: Dictionary) -> String:
 	cfg.set_value("visibility", "hidden_extensions", settings.get("view_hidden_extensions", []))
 	cfg.set_value("display", "theme", settings.get("theme", "godot_dark"))
 	cfg.set_value("display", "connection_theme", settings.get("connection_theme", "godot_dark"))
+	cfg.set_value("display", "idle_connection_alpha", settings.get(
+		"idle_connection_alpha", DEFAULT_IDLE_CONNECTION_ALPHA
+	))
+	cfg.set_value("display", "selected_connection_alpha", settings.get(
+		"selected_connection_alpha", DEFAULT_SELECTED_CONNECTION_ALPHA
+	))
 	cfg.set_value("display", "colour_overrides", settings.get("colour_overrides", {}))
 	cfg.set_value("display", "gather_relations", settings.get("gather_relations", false))
 	cfg.set_value("display", "show_embed_links", settings.get("show_embed_links", true))

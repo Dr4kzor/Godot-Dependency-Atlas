@@ -1,0 +1,7 @@
+{
+	"format": 1,
+	"overrides": {
+		"connections/synthwave/out": "#ddd3ccff",
+		"nodes/blueprint/kind_SCENE": "#617f8aff"
+	}
+}

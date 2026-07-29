@@ -33,6 +33,7 @@ const FilterWindow = preload("res://addons/orphan_finder/graph3d/filter_window.g
 const LegendWindow = preload("res://addons/orphan_finder/graph3d/legend_window.gd")
 const PaletteWindow = preload("res://addons/orphan_finder/graph3d/palette_window.gd")
 const ColourOverrides = preload("res://addons/orphan_finder/graph3d/colour_overrides.gd")
+const ThemeStore = preload("res://addons/orphan_finder/graph3d/theme_store.gd")
 const DeletionManager = preload("res://addons/orphan_finder/graph3d/deletion_manager.gd")
 const NamingAffinity = preload("res://addons/orphan_finder/graph3d/naming_affinity.gd")
 const LayoutDiagnostics = preload("res://addons/orphan_finder/graph3d/layout_diagnostics.gd")
@@ -87,7 +88,6 @@ const SELECTED_LABEL_SCALE := 1.20   # the selection itself, relative to its nei
 # --- analysis overlays -------------------------------------------------------
 const COLOR_PATH := Color(0.40, 1.00, 0.55)     # a live chain from an entry point
 const COLOR_BLAST := Color(1.00, 0.55, 0.25)      # directly depends on it
-const COLOR_BLAST_FAR := Color(0.72, 0.45, 0.32)  # further down the chain
 ## How many hops of impact are highlighted. Impact genuinely weakens with
 ## distance -- a scene that loads a script that loads a texture is barely
 ## affected by that texture changing -- and an unbounded closure from a leaf
@@ -275,12 +275,9 @@ const DASH_GAP := 0.7
 ## embedded inside a live file. Usually the result of Make Unique, which
 ## inlines a resource and silently orphans the original.
 const COLOR_EMBED_LINK := Color(0.72, 0.42, 1.00)     # purple
-const COLOR_EMBED_ANCHOR := Color(0.70, 0.35, 0.35)   # dim tie to the orphan cube
 ## Dependencies between orphans. Real relationships, but inside dead code, so
 ## they're muted to avoid reading as live wiring.
 const COLOR_ORPHAN_EDGE := Color(0.66, 0.40, 0.38, 0.5)
-## Folder-to-folder coupling, shown when a folder is selected in FOLDER mode.
-const COLOR_FOLDER_LINK := Color(0.45, 0.90, 0.80)
 
 ## Picking is a ray-sphere test with no distance limit. A world-space radius is
 ## the right model here: it projects to a screen radius proportional to
@@ -328,8 +325,6 @@ const ICON_VIEW_DISTANCE := 200.0
 const DIM_ALPHA := 0.4
 const COLOR_ORPHAN := Color(1.0, 0.32, 0.30)
 const COLOR_CYCLE := Color(1.0, 0.25, 0.95)
-const COLOR_TREE_EDGE := Color(0.55, 0.65, 0.80, 0.80)
-const COLOR_CROSS_EDGE := Color(0.50, 0.42, 0.60, 0.28)
 const COLOR_HIGHLIGHT := Color(1.0, 0.95, 0.5, 1.0)
 const COLOR_BLOCK := Color(0.42, 0.46, 0.55, 0.30)
 
@@ -399,18 +394,17 @@ var _theme_orphan := COLOR_ORPHAN
 var _theme_cycle := COLOR_CYCLE
 var _theme_out := COLOR_OUT
 var _theme_in := COLOR_IN
-var _theme_tree_edge := COLOR_TREE_EDGE
-var _theme_cross_edge := COLOR_CROSS_EDGE
-var _theme_orphan_edge := COLOR_ORPHAN_EDGE
 var _theme_proxied := COLOR_PROXIED
 var _theme_duplicated := COLOR_DUPLICATED
-var _theme_embed_link := COLOR_EMBED_LINK
-var _theme_folder_link := COLOR_FOLDER_LINK
+var _theme_dangling := COLOR_ORPHAN_EDGE
+var _theme_inline := COLOR_EMBED_LINK
 var _theme_path := COLOR_PATH
-var _theme_blast := COLOR_BLAST
-var _theme_blast_far := COLOR_BLAST_FAR
+var _theme_impact := COLOR_BLAST
 var _theme_pulse := COLOR_TRACE_PULSE
-var _theme_highlight := COLOR_HIGHLIGHT
+## Global connection opacity controls, persisted in [display] inside
+## orphan-finder.config for easy per-project tuning.
+var idle_connection_alpha := OFConfig.DEFAULT_IDLE_CONNECTION_ALPHA
+var selected_connection_alpha := OFConfig.DEFAULT_SELECTED_CONNECTION_ALPHA
 var _world_env: WorldEnvironment
 var _theme_is_dark := true
 var _theme_background := Color(0.07, 0.08, 0.11)
@@ -649,8 +643,6 @@ func _apply_theme(theme_id: String) -> void:
 	_theme_root = _overrides.node_role_color(theme_id, "root")
 	_theme_orphan = _overrides.node_role_color(theme_id, "orphan")
 	_theme_cycle = _overrides.node_role_color(theme_id, "cycle")
-	_theme_out = _overrides.node_role_color(theme_id, "out")
-	_theme_in = _overrides.node_role_color(theme_id, "in")
 	# Connection and analysis colours follow the palette too, so a theme
 	# changes the whole view rather than only the nodes.
 	_theme_is_dark = OFThemes.is_dark(theme_id)
@@ -670,18 +662,13 @@ func _apply_theme(theme_id: String) -> void:
 ## Connection colours come from their own theme and their own overrides, so
 ## the two palettes can be combined freely.
 func _apply_connection_theme() -> void:
-	_theme_tree_edge = _overrides.connection_color(_connection_theme_id, "tree_edge")
-	_theme_cross_edge = _overrides.connection_color(_connection_theme_id, "cross_edge")
-	_theme_orphan_edge = _overrides.connection_color(_connection_theme_id, "orphan_edge")
-	_theme_proxied = _overrides.connection_color(_connection_theme_id, "proxied")
-	_theme_duplicated = _overrides.connection_color(_connection_theme_id, "duplicated")
-	_theme_embed_link = _overrides.connection_color(_connection_theme_id, "embed_link")
-	_theme_folder_link = _overrides.connection_color(_connection_theme_id, "folder_link")
+	_theme_out = _overrides.connection_color(_connection_theme_id, "out")
+	_theme_in = _overrides.connection_color(_connection_theme_id, "in")
+	_theme_dangling = _overrides.connection_color(_connection_theme_id, "dangling")
+	_theme_inline = _overrides.connection_color(_connection_theme_id, "inline")
 	_theme_path = _overrides.connection_color(_connection_theme_id, "path")
-	_theme_blast = _overrides.connection_color(_connection_theme_id, "blast")
-	_theme_blast_far = _overrides.connection_color(_connection_theme_id, "blast_far")
+	_theme_impact = _overrides.connection_color(_connection_theme_id, "impact")
 	_theme_pulse = _overrides.connection_color(_connection_theme_id, "pulse")
-	_theme_highlight = _overrides.connection_color(_connection_theme_id, "highlight")
 
 
 func _apply_label_theme() -> void:
@@ -2415,7 +2402,7 @@ func _base_color_for(path: String) -> Color:
 		# that is honestly how much the change is likely to matter to them.
 		var hop := int(_analysis_depth.get(path, 1))
 		var falloff := clampf(float(hop - 1) / float(maxi(MAX_BLAST_HOPS - 1, 1)), 0.0, 1.0)
-		return _theme_blast.lerp(_theme_blast_far, falloff)
+		return _theme_impact.lerp(_theme_background, falloff * 0.45)
 	if path == ORPHAN_HUB or path == CLUSTER_HUB:
 		return _theme_orphan
 	if _orphan_notes.has(path):
@@ -2826,7 +2813,7 @@ func _rebuild_edges() -> void:
 				continue
 			if not _is_displayed(child_path) or not _is_displayed(parent_dir):
 				continue
-			_add_edge(im, parent_dir, child_path, _theme_tree_edge, related)
+			_add_edge(im, parent_dir, child_path, _theme_out, related)
 
 	for key in _graph.keys():
 		var parent: String = key
@@ -2836,11 +2823,7 @@ func _rebuild_edges() -> void:
 			var child: String = r
 			if not _positions.has(child) or not _is_displayed(child):
 				continue
-			var is_tree_edge: bool = (
-				_layout_mode == LayoutMode.DEPENDENCY
-				and String(_dep_parent.get(child, "")) == parent
-			)
-			_add_edge(im, parent, child, _theme_tree_edge if is_tree_edge else _theme_cross_edge, related)
+			_add_edge(im, parent, child, _theme_out, related)
 
 	# Orphan-to-orphan dependencies. Dead code still has real internal
 	# structure, and drawing it is what makes a dead cluster legible as a
@@ -2861,7 +2844,7 @@ func _rebuild_edges() -> void:
 				continue
 			if _selected == orphan_src or _selected == orphan_dst:
 				continue   # drawn weighted by _draw_selection_links instead
-			_add_edge(im, orphan_src, orphan_dst, _theme_orphan_edge, related)
+			_add_edge(im, orphan_src, orphan_dst, _theme_dangling, related)
 
 	# Folder coupling and inlined-copy links are noise during a trace: only
 	# the chain being traced should be visible.
@@ -3104,9 +3087,10 @@ func _draw_folder_links(im: ImmediateMesh) -> void:
 		var other: String = key
 		if not _is_displayed(other):
 			continue
-		im.surface_set_color(_theme_folder_link)
+		var colour := _connection_alpha(_theme_out, selected_connection_alpha)
+		im.surface_set_color(colour)
 		im.surface_add_vertex(origin)
-		im.surface_set_color(_theme_folder_link)
+		im.surface_set_color(colour)
 		im.surface_add_vertex(_positions[other])
 
 
@@ -3131,11 +3115,19 @@ func _draw_embed_links(im: ImmediateMesh) -> void:
 			or _selected == host
 			or _selected == _proxy_path_for(orphan)
 		)
+		var selected_relation := (
+			_selected == orphan
+			or _selected == host
+			or _selected == _proxy_path_for(orphan)
+		)
 
 		var proxy := _proxy_path_for(orphan)
 		if _positions.has(proxy):
 			# Matches the node colour, so the pair reads as one unit.
-			var link_colour := _theme_proxied
+			var link_alpha := (
+				selected_connection_alpha if selected_relation else idle_connection_alpha
+			)
+			var link_colour := _connection_alpha(_theme_inline, link_alpha)
 			# Dotted from the tree down to the stand-in: this is not a
 			# reference the project declares, it is the same code in two
 			# places. Solid from the stand-in on to the real file, because
@@ -3150,16 +3142,20 @@ func _draw_embed_links(im: ImmediateMesh) -> void:
 
 		# No proxy: tie it to the cube and link straight to its host.
 		if _positions.has(ORPHAN_HUB):
-			im.surface_set_color(COLOR_EMBED_ANCHOR)
+			var anchor_colour := _connection_alpha(_theme_dangling, idle_connection_alpha)
+			im.surface_set_color(anchor_colour)
 			im.surface_add_vertex(_positions[ORPHAN_HUB])
-			im.surface_set_color(COLOR_EMBED_ANCHOR)
+			im.surface_set_color(anchor_colour)
 			im.surface_add_vertex(_positions[orphan])
 
 		if not _positions.has(host) or not _is_displayed(host) or not relevant:
 			continue
-		im.surface_set_color(_theme_embed_link)
+		var inline_colour := _connection_alpha(_theme_inline, (
+			selected_connection_alpha if selected_relation else idle_connection_alpha
+		))
+		im.surface_set_color(inline_colour)
 		im.surface_add_vertex(_positions[orphan])
-		im.surface_set_color(_theme_embed_link)
+		im.surface_set_color(inline_colour)
 		im.surface_add_vertex(_positions[host])
 
 
@@ -3223,7 +3219,7 @@ func _add_block_outline(im: ImmediateMesh, dir_path: String, related: Dictionary
 	var col := COLOR_BLOCK
 	if _selected != "":
 		if dir_path == _selected:
-			col = _theme_highlight
+			col = COLOR_HIGHLIGHT
 		elif not related.has(dir_path):
 			col = Color(col.r, col.g, col.b, col.a * DIM_ALPHA)
 
@@ -3413,11 +3409,17 @@ func _draw_selection_links(im: ImmediateMesh, tubes: Array) -> void:
 		if out_weight > 0:
 			var a := origin + (lane if both else Vector3.ZERO)
 			var b := target_pos + (lane if both else Vector3.ZERO)
-			_draw_link(im, tubes, a, b, _theme_out, out_weight)
+			_draw_link(
+				im, tubes, a, b,
+				_connection_alpha(_theme_out, selected_connection_alpha), out_weight
+			)
 		if in_weight > 0:
 			var a2 := origin - (lane if both else Vector3.ZERO)
 			var b2 := target_pos - (lane if both else Vector3.ZERO)
-			_draw_link(im, tubes, b2, a2, _theme_in, in_weight)
+			_draw_link(
+				im, tubes, b2, a2,
+				_connection_alpha(_theme_in, selected_connection_alpha), in_weight
+			)
 
 
 ## Any unit vector perpendicular to `dir`, chosen stably.
@@ -3499,12 +3501,15 @@ func _add_tube_surface(im: ImmediateMesh, a: Vector3, b: Vector3, radius: float,
 
 func _add_edge(im: ImmediateMesh, from_path: String, to_path: String, base: Color, related: Dictionary) -> void:
 	if _analysis_mode != AnalysisMode.NONE:
-		var analysis_col := _theme_path if _analysis_mode == AnalysisMode.PATHS else _theme_blast
+		var analysis_col := _connection_alpha(
+			_theme_path if _analysis_mode == AnalysisMode.PATHS else _theme_impact,
+			selected_connection_alpha
+		)
 		var edge_key := "%s|%s" % [from_path, to_path]
 		if _trace_active and _analysis_mode == AnalysisMode.PATHS and _analysis_edges.has(edge_key):
 			# Not yet travelled: leave it faint so the lit trail stands out.
 			if not _trace_edges_done.has(edge_key):
-				var pending := Color(analysis_col.r, analysis_col.g, analysis_col.b, 0.18)
+				var pending := _connection_alpha(analysis_col, idle_connection_alpha)
 				im.surface_set_color(pending)
 				im.surface_add_vertex(_positions[from_path])
 				im.surface_set_color(pending)
@@ -3518,25 +3523,29 @@ func _add_edge(im: ImmediateMesh, from_path: String, to_path: String, base: Colo
 			return
 		# Everything outside the analysis fades right back, so the chain is
 		# legible against the rest of the graph.
-		var faded := Color(base.r, base.g, base.b, base.a * DIM_ALPHA * 0.5)
+		var faded := _connection_alpha(base, idle_connection_alpha * DIM_ALPHA)
 		im.surface_set_color(faded)
 		im.surface_add_vertex(_positions[from_path])
 		im.surface_set_color(faded)
 		im.surface_add_vertex(_positions[to_path])
 		return
 
-	var col := base
+	var col := _connection_alpha(base, idle_connection_alpha)
 	if _selected != "":
 		# Edges touching the selection are drawn by _draw_selection_links,
 		# which groups both directions of a pair together.
 		if from_path == _selected or to_path == _selected:
 			return
 		elif not (related.has(from_path) and related.has(to_path)):
-			col = Color(base.r, base.g, base.b, base.a * DIM_ALPHA)
+			col = _connection_alpha(base, idle_connection_alpha * DIM_ALPHA)
 	im.surface_set_color(col)
 	im.surface_add_vertex(_positions[from_path])
 	im.surface_set_color(col)
 	im.surface_add_vertex(_positions[to_path])
+
+
+func _connection_alpha(colour: Color, alpha: float) -> Color:
+	return Color(colour.r, colour.g, colour.b, clampf(alpha, 0.0, 1.0))
 
 
 func _related_set() -> Dictionary:
@@ -4085,9 +4094,11 @@ func _build_ui() -> void:
 	add_child(_connection_palette_window)
 	_connection_palette_window.configure(
 		"connections", "Connection Colours", OFThemes.connection_theme_ids(),
-		_theme_labels(OFThemes.connection_theme_ids(), true), _connection_colour_entries(), _overrides
+		_theme_labels(OFThemes.connection_theme_ids(), true), _connection_colour_entries(), _overrides,
+		{"idle": idle_connection_alpha, "selected": selected_connection_alpha}
 	)
 	_connect_palette_window(_connection_palette_window)
+	_connection_palette_window.connection_alpha_changed.connect(_on_connection_alpha_changed)
 
 	_open_dialog = FileDialog.new()
 	_open_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
@@ -4542,15 +4553,24 @@ func _connect_palette_window(window) -> void:
 	window.colour_overridden.connect(_on_colour_overridden)
 	window.colour_reset.connect(_on_colour_reset)
 	window.theme_reset.connect(_on_palette_theme_reset)
+	window.save_as_requested.connect(_on_theme_save_as)
+	window.save_requested.connect(_on_theme_save)
+	window.rename_requested.connect(_on_theme_rename)
+	window.delete_requested.connect(_on_theme_delete)
+	window.import_requested.connect(_on_theme_import)
+	window.export_requested.connect(_on_theme_export)
 
 
 func _theme_labels(ids: Array, connections: bool) -> Array:
 	var labels: Array = []
 	for id_any in ids:
 		var theme_id := String(id_any)
-		labels.append(
-			OFThemes.connection_label_of(theme_id) if connections else OFThemes.label_of(theme_id)
-		)
+		if connections:
+			# Make the independent scope explicit: choosing this changes only
+			# graph wiring, never file/node colours.
+			labels.append(OFThemes.connection_label_of(theme_id) + " — Connections")
+		else:
+			labels.append(OFThemes.label_of(theme_id))
 	return labels
 
 
@@ -4583,18 +4603,13 @@ func _node_colour_entries() -> Array:
 
 func _connection_colour_entries() -> Array:
 	var described := {
-		"tree_edge": ["Tree edge", "The route traversal followed to first reach a file."],
-		"cross_edge": ["Cross-link", "An extra reference to a file placed elsewhere."],
-		"orphan_edge": ["Orphan dependency", "A reference between two orphans."],
-		"proxied": ["Resource with inlined code", "Almost certainly still in use."],
-		"duplicated": ["Other file with inlined code", "Worth verifying."],
-		"embed_link": ["Inlined-copy link", "Joins a file to the copy of its code."],
-		"folder_link": ["Folder coupling", "Shown when a folder is selected."],
+		"out": ["Line OUT", "References made by the selected file."],
+		"in": ["Line IN", "Files that reference the selected file."],
+		"dangling": ["Dangling resources", "Connections inside unreachable code."],
+		"inline": ["Inlined-copy link", "Joins a file to the copy of its code."],
 		"path": ["Reachability path", "A chain from an entry point."],
-		"blast": ["Change impact — direct", "Files that use the selection directly."],
-		"blast_far": ["Change impact — indirect", "Further down the chain."],
+		"impact": ["Change impact", "Files affected by the selection."],
 		"pulse": ["Trace pulse", "The dot that walks each traced chain."],
-		"highlight": ["Highlight", "Edges touching the selection."],
 	}
 	var entries: Array = []
 	for key_any in OFThemes.CONNECTION_KEYS:
@@ -4623,10 +4638,161 @@ func _open_connection_palette() -> void:
 	_release_mouse()
 	_connection_palette_window.configure(
 		"connections", "Connection Colours", OFThemes.connection_theme_ids(),
-		_theme_labels(OFThemes.connection_theme_ids(), true), _connection_colour_entries(), _overrides
+		_theme_labels(OFThemes.connection_theme_ids(), true), _connection_colour_entries(), _overrides,
+		{"idle": idle_connection_alpha, "selected": selected_connection_alpha}
 	)
 	_connection_palette_window.set_theme_id(_connection_theme_id)
 	_connection_palette_window.popup_centered()
+
+
+func _on_connection_alpha_changed(idle_alpha: float, selected_alpha: float) -> void:
+	idle_connection_alpha = clampf(idle_alpha, 0.0, 1.0)
+	selected_connection_alpha = clampf(selected_alpha, 0.0, 1.0)
+	_rebuild_edges()
+	_save_settings()
+
+
+func _resolved_theme_colours(scope: String, theme_id: String) -> Dictionary:
+	var colours := {}
+	if scope == "connections":
+		for key_any in OFThemes.CONNECTION_KEYS:
+			var key := String(key_any)
+			colours[key] = _overrides.connection_color(theme_id, key)
+		return colours
+	for kind_value in TypeIcons.Kind.values():
+		var kind_name: String = TypeIcons.Kind.keys()[int(kind_value)]
+		colours["kind_" + kind_name] = _overrides.node_kind_color(theme_id, kind_name)
+	for role in ["root", "orphan", "cycle", "background"]:
+		colours["role_" + role] = _overrides.node_role_color(theme_id, role)
+	return colours
+
+
+func _refresh_palette_picker(scope: String, selected_id: String) -> void:
+	var window = _connection_palette_window if scope == "connections" else _node_palette_window
+	var ids := OFThemes.connection_theme_ids() if scope == "connections" else OFThemes.theme_ids()
+	window.configure(
+		scope,
+		"Connection Colours" if scope == "connections" else "Node Colours",
+		ids, _theme_labels(ids, scope == "connections"),
+		_connection_colour_entries() if scope == "connections" else _node_colour_entries(),
+		_overrides,
+		{"idle": idle_connection_alpha, "selected": selected_connection_alpha}
+	)
+	window.set_theme_id(selected_id)
+
+
+func _on_theme_save_as(scope: String, source_theme_id: String, name: String) -> void:
+	var result := ThemeStore.save_custom(
+		_scan_root, scope, name, _resolved_theme_colours(scope, source_theme_id),
+		OFThemes.is_dark(source_theme_id)
+	)
+	var problem := String(result.get("error", ""))
+	if problem != "":
+		_show_toast("Could not save theme: " + problem)
+		return
+	var new_id := String(result["id"])
+	_overrides.clear_theme(scope, new_id)
+	if scope == "connections":
+		_connection_theme_id = new_id
+		_apply_connection_theme()
+	else:
+		_theme_id = new_id
+		_apply_theme(new_id)
+	_refresh_palette_picker(scope, new_id)
+	await _refresh_visuals()
+	_save_settings()
+	_show_toast("Saved custom theme “%s”" % name)
+
+
+func _on_theme_save(scope: String, theme_id: String) -> void:
+	if not OFThemes.is_custom_theme(scope, theme_id):
+		_show_toast("Built-in themes cannot be overwritten; save a custom copy first.")
+		return
+	var problem := ThemeStore.update_custom(
+		_scan_root, scope, theme_id, _resolved_theme_colours(scope, theme_id),
+		OFThemes.is_dark(theme_id)
+	)
+	if problem != "":
+		_show_toast("Could not save theme: " + problem)
+		return
+	# The resolved colours are now the theme defaults, so these overrides are
+	# redundant and would make later edits harder to reason about.
+	_overrides.clear_theme(scope, theme_id)
+	_refresh_palette_picker(scope, theme_id)
+	await _reapply_palettes()
+	_show_toast("Custom theme saved")
+
+
+func _on_theme_rename(scope: String, theme_id: String, name: String) -> void:
+	if not OFThemes.is_custom_theme(scope, theme_id):
+		_show_toast("Built-in themes cannot be renamed; save a custom copy first.")
+		return
+	var problem := ThemeStore.rename_custom(_scan_root, theme_id, name)
+	if problem != "":
+		_show_toast("Could not rename theme: " + problem)
+		return
+	_refresh_palette_picker(scope, theme_id)
+	_save_settings()
+	_show_toast("Theme renamed to “%s”" % name)
+
+
+func _on_theme_delete(scope: String, theme_id: String) -> void:
+	if not OFThemes.is_custom_theme(scope, theme_id):
+		_show_toast("Built-in themes cannot be deleted.")
+		return
+	var problem := ThemeStore.delete_custom(_scan_root, scope, theme_id)
+	if problem != "":
+		_show_toast("Could not delete theme: " + problem)
+		return
+	_overrides.clear_theme(scope, theme_id)
+	var fallback := (
+		OFThemes.DEFAULT_CONNECTION_THEME if scope == "connections"
+		else OFThemes.DEFAULT_THEME
+	)
+	if scope == "connections":
+		_connection_theme_id = fallback
+		_apply_connection_theme()
+	else:
+		_theme_id = fallback
+		_apply_theme(fallback)
+	_refresh_palette_picker(scope, fallback)
+	await _refresh_visuals()
+	_save_settings()
+	_show_toast("Custom theme deleted; restored the default theme")
+
+
+func _on_theme_import(path: String) -> void:
+	var result := ThemeStore.import_theme(_scan_root, path)
+	var problem := String(result.get("error", ""))
+	if problem != "":
+		_show_toast("Could not import theme: " + problem)
+		return
+	var scope := String(result["scope"])
+	var theme_id := String(result["id"])
+	if scope == "connections":
+		_connection_theme_id = theme_id
+		_apply_connection_theme()
+	else:
+		_theme_id = theme_id
+		_apply_theme(theme_id)
+	_refresh_palette_picker(scope, theme_id)
+	await _refresh_visuals()
+	_save_settings()
+	_show_toast("Imported theme into custom_themes")
+
+
+func _on_theme_export(scope: String, theme_id: String, path: String) -> void:
+	if not path.to_lower().ends_with(".json"):
+		path += ".json"
+	var name := (
+		OFThemes.connection_label_of(theme_id)
+		if scope == "connections" else OFThemes.label_of(theme_id)
+	)
+	var problem := ThemeStore.export_theme(
+		path, scope, theme_id, name, _resolved_theme_colours(scope, theme_id),
+		OFThemes.is_dark(theme_id)
+	)
+	_show_toast("Theme exported" if problem == "" else "Could not export theme: " + problem)
 
 
 func _on_palette_theme_selected(scope: String, theme_id: String) -> void:
@@ -4728,15 +4894,22 @@ func _save_settings() -> void:
 		"view_hidden_extensions": _view_hidden_extensions.keys(),
 		"theme": _theme_id,
 		"connection_theme": _connection_theme_id,
+		"idle_connection_alpha": idle_connection_alpha,
+		"selected_connection_alpha": selected_connection_alpha,
 		"colour_overrides": _overrides.to_flat(),
 		"gather_relations": _gather_enabled,
 		"show_embed_links": _show_embed_links,
 	})
 	if problem != "":
 		push_warning("Orphan Finder: " + problem)
+	var theme_problem := ThemeStore.save_overrides(_scan_root, _overrides.to_flat())
+	if theme_problem != "":
+		push_warning("Orphan Finder: " + theme_problem)
 
 
 func _load_settings() -> void:
+	for problem in ThemeStore.load_custom_themes(_scan_root):
+		push_warning("Orphan Finder: " + String(problem))
 	var settings := OFConfig.load_settings(_scan_root)
 	_hidden_kinds.clear()
 	for k in settings["hidden_kinds"]:
@@ -4754,7 +4927,17 @@ func _load_settings() -> void:
 	_gather_enabled = bool(settings.get("gather_relations", false))
 	_show_embed_links = bool(settings.get("show_embed_links", true))
 	_connection_theme_id = String(settings.get("connection_theme", OFThemes.DEFAULT_CONNECTION_THEME))
-	_overrides.from_flat(Dictionary(settings.get("colour_overrides", {})))
+	idle_connection_alpha = clampf(float(settings.get(
+		"idle_connection_alpha", OFConfig.DEFAULT_IDLE_CONNECTION_ALPHA
+	)), 0.0, 1.0)
+	selected_connection_alpha = clampf(float(settings.get(
+		"selected_connection_alpha", OFConfig.DEFAULT_SELECTED_CONNECTION_ALPHA
+	)), 0.0, 1.0)
+	var json_overrides := ThemeStore.load_overrides(_scan_root)
+	_overrides.from_flat(
+		json_overrides if not json_overrides.is_empty()
+		else Dictionary(settings.get("colour_overrides", {}))
+	)
 	_apply_theme(String(settings["theme"]))
 
 

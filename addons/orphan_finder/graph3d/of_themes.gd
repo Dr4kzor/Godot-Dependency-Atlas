@@ -3,8 +3,8 @@ extends RefCounted
 
 ## Selectable colour palettes for the graph view.
 ##
-## Each theme supplies a colour per file kind plus the special roles (root,
-## orphan, cycle, edge directions). "Colourblind safe" exists because the
+## Each theme supplies a colour per file kind plus the special node roles
+## (root, orphan and cycle). "Colourblind safe" exists because the
 ## default palette leans on red/green separation for orphan-vs-script, which
 ## is the single most common form of colour vision deficiency.
 
@@ -22,8 +22,8 @@ const THEMES := {
 			"FOLDER": Color(0.55, 0.58, 0.68), "OTHER": Color(0.85, 0.55, 1.00),
 		},
 		"root": Color(1.00, 0.85, 0.35), "orphan": Color(1.00, 0.32, 0.30),
-		"cycle": Color(1.00, 0.25, 0.95), "out": Color(1.00, 0.78, 0.35),
-		"in": Color(0.40, 0.85, 1.00), "background": Color(0.07, 0.08, 0.11),
+		"cycle": Color(1.00, 0.25, 0.95),
+		"background": Color(0.07, 0.08, 0.11),
 	},
 	"high_contrast": {
 		"label": "High Contrast", "dark": true,
@@ -38,8 +38,8 @@ const THEMES := {
 			"FOLDER": Color(0.80, 0.82, 0.90), "OTHER": Color(0.80, 0.45, 1.00),
 		},
 		"root": Color(1.00, 0.95, 0.20), "orphan": Color(1.00, 0.15, 0.15),
-		"cycle": Color(1.00, 0.10, 1.00), "out": Color(1.00, 0.72, 0.10),
-		"in": Color(0.20, 0.85, 1.00), "background": Color(0.02, 0.02, 0.04),
+		"cycle": Color(1.00, 0.10, 1.00),
+		"background": Color(0.02, 0.02, 0.04),
 	},
 	"colorblind_safe": {
 		"label": "Colourblind Safe", "dark": true,
@@ -56,8 +56,8 @@ const THEMES := {
 			"FOLDER": Color(0.75, 0.75, 0.78), "OTHER": Color(0.60, 0.45, 0.85),
 		},
 		"root": Color(0.94, 0.89, 0.26), "orphan": Color(0.84, 0.37, 0.00),
-		"cycle": Color(0.80, 0.47, 0.65), "out": Color(0.90, 0.62, 0.00),
-		"in": Color(0.34, 0.71, 0.91), "background": Color(0.08, 0.09, 0.12),
+		"cycle": Color(0.80, 0.47, 0.65),
+		"background": Color(0.08, 0.09, 0.12),
 	},
 	"muted": {
 		"label": "Muted", "dark": true,
@@ -72,8 +72,8 @@ const THEMES := {
 			"FOLDER": Color(0.60, 0.62, 0.68), "OTHER": Color(0.68, 0.58, 0.80),
 		},
 		"root": Color(0.88, 0.78, 0.50), "orphan": Color(0.82, 0.48, 0.45),
-		"cycle": Color(0.78, 0.52, 0.76), "out": Color(0.82, 0.72, 0.52),
-		"in": Color(0.55, 0.72, 0.85), "background": Color(0.11, 0.12, 0.14),
+		"cycle": Color(0.78, 0.52, 0.76),
+		"background": Color(0.11, 0.12, 0.14),
 	},
 	"solarized_dark": {
 		"label": "Solarized Dark", "dark": true,
@@ -88,8 +88,8 @@ const THEMES := {
 			"FOLDER": Color("#839496"), "OTHER": Color("#9a86c8"),
 		},
 		"root": Color("#b58900"), "orphan": Color("#dc322f"),
-		"cycle": Color("#d33682"), "out": Color("#cb4b16"),
-		"in": Color("#268bd2"), "background": Color("#002b36"),
+		"cycle": Color("#d33682"),
+		"background": Color("#002b36"),
 	},
 	"nord": {
 		"label": "Nord", "dark": true,
@@ -104,8 +104,8 @@ const THEMES := {
 			"FOLDER": Color("#d8dee9"), "OTHER": Color("#a98bc4"),
 		},
 		"root": Color("#ebcb8b"), "orphan": Color("#bf616a"),
-		"cycle": Color("#b48ead"), "out": Color("#d08770"),
-		"in": Color("#88c0d0"), "background": Color("#2e3440"),
+		"cycle": Color("#b48ead"),
+		"background": Color("#2e3440"),
 	},
 	"gruvbox": {
 		"label": "Gruvbox Dark", "dark": true,
@@ -120,8 +120,8 @@ const THEMES := {
 			"FOLDER": Color("#d5c4a1"), "OTHER": Color("#c39bd6"),
 		},
 		"root": Color("#fabd2f"), "orphan": Color("#fb4934"),
-		"cycle": Color("#d3869b"), "out": Color("#fe8019"),
-		"in": Color("#83a598"), "background": Color("#282828"),
+		"cycle": Color("#d3869b"),
+		"background": Color("#282828"),
 	},
 	"dracula": {
 		"label": "Dracula", "dark": true,
@@ -136,8 +136,8 @@ const THEMES := {
 			"FOLDER": Color("#b0b4c9"), "OTHER": Color("#c9a2ff"),
 		},
 		"root": Color("#f1fa8c"), "orphan": Color("#ff5555"),
-		"cycle": Color("#bd93f9"), "out": Color("#ffb86c"),
-		"in": Color("#8be9fd"), "background": Color("#282a36"),
+		"cycle": Color("#bd93f9"),
+		"background": Color("#282a36"),
 	},
 	"synthwave": {
 		"label": "Synthwave", "dark": true,
@@ -152,8 +152,8 @@ const THEMES := {
 			"FOLDER": Color("#d0cce8"), "OTHER": Color("#c37bff"),
 		},
 		"root": Color("#fede5d"), "orphan": Color("#fe4450"),
-		"cycle": Color("#ff7edb"), "out": Color("#ff8b39"),
-		"in": Color("#36f9f6"), "background": Color("#241b2f"),
+		"cycle": Color("#ff7edb"),
+		"background": Color("#241b2f"),
 	},
 	"blueprint": {
 		"label": "Blueprint", "dark": true,
@@ -170,8 +170,8 @@ const THEMES := {
 			"FOLDER": Color("#dbe9f7"), "OTHER": Color("#b49bff"),
 		},
 		"root": Color("#ffd479"), "orphan": Color("#ff6b8a"),
-		"cycle": Color("#ff9db0"), "out": Color("#ffd479"),
-		"in": Color("#7fdbff"), "background": Color("#0a2540"),
+		"cycle": Color("#ff9db0"),
+		"background": Color("#0a2540"),
 	},
 	"paper_light": {
 		"label": "Paper (light)", "dark": false,
@@ -188,26 +188,27 @@ const THEMES := {
 			"FOLDER": Color("#4a4f57"), "OTHER": Color("#6b3fa0"),
 		},
 		"root": Color("#a8620a"), "orphan": Color("#c1121f"),
-		"cycle": Color("#9a1f9a"), "out": Color("#b8620a"),
-		"in": Color("#1f6feb"), "background": Color("#f2efe6"),
+		"cycle": Color("#9a1f9a"),
+		"background": Color("#f2efe6"),
 	},
 }
 
 const DEFAULT_THEME := "godot_dark"
+static var CUSTOM_THEMES := {}
 
 
 static func theme_ids() -> Array:
-	var ids: Array = THEMES.keys()
+	var ids: Array = THEMES.keys() + CUSTOM_THEMES.keys()
 	ids.sort()
 	return ids
 
 
 static func label_of(theme_id: String) -> String:
-	return String(THEMES.get(theme_id, THEMES[DEFAULT_THEME])["label"])
+	return String(palette(theme_id)["label"])
 
 
 static func palette(theme_id: String) -> Dictionary:
-	return THEMES.get(theme_id, THEMES[DEFAULT_THEME])
+	return CUSTOM_THEMES.get(theme_id, THEMES.get(theme_id, THEMES[DEFAULT_THEME]))
 
 
 ## Colour for a kind name (the Kind enum key, e.g. "SCENE").
@@ -228,191 +229,165 @@ static func is_dark(theme_id: String) -> bool:
 
 ## Connection colours are a SEPARATE theme from the node palette, so the two
 ## can be mixed: a calm node palette with vivid links, or the reverse.
+##
+## Only visually meaningful relationships belong here. Structural tree,
+## cross-file and folder edges all use "out"; their visibility is controlled
+## by the shared idle/selected alpha settings rather than extra arbitrary
+## colours.
 const CONNECTION_THEMES := {
 	"godot_dark": {
 		"label": "Godot Dark",
-		"tree_edge": Color(0.55,0.65,0.80),
-		"cross_edge": Color(0.50,0.42,0.60),
-		"orphan_edge": Color(0.66,0.40,0.38),
-		"proxied": Color(0.35,0.85,0.78),
-		"duplicated": Color(1.00,0.72,0.30),
-		"embed_link": Color(0.72,0.42,1.00),
-		"folder_link": Color(0.45,0.90,0.80),
-		"path": Color(0.40,1.00,0.55),
-		"blast": Color(1.00,0.55,0.25),
-		"blast_far": Color(0.72,0.45,0.32),
-		"pulse": Color(0.75,1.00,0.85),
-		"highlight": Color(1.00,0.95,0.50),
+		"out": Color("#ffb454"),
+		"in": Color("#55c2ff"),
+		"dangling": Color("#ff5f5f"),
+		"inline": Color("#b779ff"),
+		"path": Color("#55e88b"),
+		"impact": Color("#ff7a45"),
+		"pulse": Color("#d5ffe4"),
 	},
 	"high_contrast": {
 		"label": "High Contrast",
-		"tree_edge": Color(0.95,0.95,1.00),
-		"cross_edge": Color(0.70,0.55,0.95),
-		"orphan_edge": Color(0.85,0.45,0.40),
-		"proxied": Color(0.20,1.00,0.90),
-		"duplicated": Color(1.00,0.75,0.10),
-		"embed_link": Color(0.85,0.40,1.00),
-		"folder_link": Color(0.30,1.00,0.85),
-		"path": Color(0.25,1.00,0.40),
-		"blast": Color(1.00,0.50,0.10),
-		"blast_far": Color(0.80,0.45,0.25),
-		"pulse": Color(0.80,1.00,0.90),
-		"highlight": Color(1.00,1.00,0.30),
+		"out": Color("#ffd600"),
+		"in": Color("#00c8ff"),
+		"dangling": Color("#ff3b3b"),
+		"inline": Color("#df5cff"),
+		"path": Color("#35ff68"),
+		"impact": Color("#ff7900"),
+		"pulse": Color("#ffffff"),
 	},
 	"colorblind_safe": {
 		"label": "Colourblind Safe",
-		"tree_edge": Color(0.34,0.71,0.91),
-		"cross_edge": Color(0.90,0.62,0.00),
-		"orphan_edge": Color(0.65,0.46,0.11),
-		"proxied": Color(0.34,0.71,0.91),
-		"duplicated": Color(0.90,0.62,0.00),
-		"embed_link": Color(0.80,0.47,0.65),
-		"folder_link": Color(0.35,0.70,0.65),
-		"path": Color(0.00,0.62,0.45),
-		"blast": Color(0.84,0.37,0.00),
-		"blast_far": Color(0.65,0.46,0.11),
-		"pulse": Color(0.60,0.85,0.95),
-		"highlight": Color(0.94,0.89,0.26),
+		"out": Color("#e69f00"),
+		"in": Color("#56b4e9"),
+		"dangling": Color("#d55e00"),
+		"inline": Color("#cc79a7"),
+		"path": Color("#009e73"),
+		"impact": Color("#f0e442"),
+		"pulse": Color("#e8f7ff"),
 	},
 	"muted": {
 		"label": "Muted",
-		"tree_edge": Color(0.60,0.68,0.62),
-		"cross_edge": Color(0.72,0.62,0.55),
-		"orphan_edge": Color(0.62,0.48,0.45),
-		"proxied": Color(0.45,0.75,0.72),
-		"duplicated": Color(0.85,0.72,0.50),
-		"embed_link": Color(0.68,0.52,0.80),
-		"folder_link": Color(0.50,0.75,0.70),
-		"path": Color(0.50,0.78,0.55),
-		"blast": Color(0.85,0.60,0.42),
-		"blast_far": Color(0.68,0.52,0.45),
-		"pulse": Color(0.72,0.88,0.80),
-		"highlight": Color(0.90,0.85,0.55),
+		"out": Color("#c49a62"),
+		"in": Color("#6f9fbe"),
+		"dangling": Color("#b86f69"),
+		"inline": Color("#9b7db5"),
+		"path": Color("#7eae83"),
+		"impact": Color("#c57d5c"),
+		"pulse": Color("#d0ddd5"),
 	},
 	"solarized_dark": {
 		"label": "Solarized Dark",
-		"tree_edge": Color(0.16,0.63,0.60),
-		"cross_edge": Color(0.71,0.54,0.00),
-		"orphan_edge": Color(0.70,0.42,0.30),
-		"proxied": Color(0.16,0.63,0.60),
-		"duplicated": Color(0.71,0.54,0.00),
-		"embed_link": Color(0.42,0.44,0.77),
-		"folder_link": Color(0.16,0.63,0.60),
-		"path": Color(0.52,0.60,0.00),
-		"blast": Color(0.80,0.29,0.09),
-		"blast_far": Color(0.60,0.40,0.25),
-		"pulse": Color(0.65,0.85,0.75),
-		"highlight": Color(0.71,0.54,0.00),
+		"out": Color("#cb4b16"),
+		"in": Color("#268bd2"),
+		"dangling": Color("#dc322f"),
+		"inline": Color("#6c71c4"),
+		"path": Color("#859900"),
+		"impact": Color("#b58900"),
+		"pulse": Color("#93d6cf"),
 	},
 	"nord": {
 		"label": "Nord",
-		"tree_edge": Color(0.53,0.75,0.82),
-		"cross_edge": Color(0.71,0.56,0.68),
-		"orphan_edge": Color(0.75,0.38,0.42),
-		"proxied": Color(0.56,0.74,0.73),
-		"duplicated": Color(0.92,0.80,0.55),
-		"embed_link": Color(0.71,0.56,0.68),
-		"folder_link": Color(0.53,0.75,0.82),
-		"path": Color(0.64,0.75,0.55),
-		"blast": Color(0.82,0.53,0.44),
-		"blast_far": Color(0.66,0.48,0.44),
-		"pulse": Color(0.75,0.87,0.85),
-		"highlight": Color(0.92,0.80,0.55),
+		"out": Color("#d08770"),
+		"in": Color("#88c0d0"),
+		"dangling": Color("#bf616a"),
+		"inline": Color("#b48ead"),
+		"path": Color("#a3be8c"),
+		"impact": Color("#ebcb8b"),
+		"pulse": Color("#e5e9f0"),
 	},
 	"gruvbox": {
 		"label": "Gruvbox Dark",
-		"tree_edge": Color(0.72,0.73,0.15),
-		"cross_edge": Color(0.83,0.53,0.61),
-		"orphan_edge": Color(0.72,0.42,0.32),
-		"proxied": Color(0.56,0.75,0.49),
-		"duplicated": Color(0.98,0.74,0.18),
-		"embed_link": Color(0.83,0.53,0.61),
-		"folder_link": Color(0.27,0.52,0.53),
-		"path": Color(0.72,0.73,0.15),
-		"blast": Color(0.99,0.50,0.10),
-		"blast_far": Color(0.75,0.45,0.25),
-		"pulse": Color(0.80,0.88,0.70),
-		"highlight": Color(0.98,0.74,0.18),
+		"out": Color("#fe8019"),
+		"in": Color("#83a598"),
+		"dangling": Color("#fb4934"),
+		"inline": Color("#d3869b"),
+		"path": Color("#b8bb26"),
+		"impact": Color("#fabd2f"),
+		"pulse": Color("#ebdbb2"),
 	},
 	"dracula": {
 		"label": "Dracula",
-		"tree_edge": Color(0.55,0.91,0.99),
-		"cross_edge": Color(1.00,0.47,0.78),
-		"orphan_edge": Color(0.80,0.42,0.45),
-		"proxied": Color(0.55,0.91,0.99),
-		"duplicated": Color(1.00,0.72,0.42),
-		"embed_link": Color(0.74,0.58,0.98),
-		"folder_link": Color(0.35,0.85,0.88),
-		"path": Color(0.31,0.98,0.48),
-		"blast": Color(1.00,0.55,0.35),
-		"blast_far": Color(0.72,0.48,0.42),
-		"pulse": Color(0.80,1.00,0.90),
-		"highlight": Color(0.95,0.98,0.55),
+		"out": Color("#ffb86c"),
+		"in": Color("#8be9fd"),
+		"dangling": Color("#ff5555"),
+		"inline": Color("#bd93f9"),
+		"path": Color("#50fa7b"),
+		"impact": Color("#f1fa8c"),
+		"pulse": Color("#f8f8f2"),
 	},
 	"synthwave": {
 		"label": "Synthwave",
-		"tree_edge": Color(0.21,0.98,0.96),
-		"cross_edge": Color(1.00,0.49,0.86),
-		"orphan_edge": Color(0.85,0.35,0.48),
-		"proxied": Color(0.21,0.85,0.84),
-		"duplicated": Color(1.00,0.85,0.36),
-		"embed_link": Color(0.73,0.40,1.00),
-		"folder_link": Color(0.21,0.98,0.96),
-		"path": Color(0.45,0.95,0.72),
-		"blast": Color(1.00,0.55,0.22),
-		"blast_far": Color(0.75,0.45,0.40),
-		"pulse": Color(0.85,1.00,0.95),
-		"highlight": Color(1.00,0.89,0.36),
+		"out": Color("#ff8b39"),
+		"in": Color("#36f9f6"),
+		"dangling": Color("#fe4450"),
+		"inline": Color("#b967ff"),
+		"path": Color("#72f1b8"),
+		"impact": Color("#fede5d"),
+		"pulse": Color("#ffffff"),
 	},
 	"blueprint": {
 		"label": "Blueprint",
-		"tree_edge": Color(0.50,0.86,1.00),
-		"cross_edge": Color(0.85,0.80,0.55),
-		"orphan_edge": Color(0.78,0.50,0.55),
-		"proxied": Color(0.22,0.80,0.80),
-		"duplicated": Color(1.00,0.83,0.47),
-		"embed_link": Color(0.65,0.70,1.00),
-		"folder_link": Color(0.22,0.80,0.80),
-		"path": Color(0.50,0.90,0.85),
-		"blast": Color(1.00,0.67,0.44),
-		"blast_far": Color(0.72,0.55,0.48),
-		"pulse": Color(0.80,0.95,1.00),
-		"highlight": Color(1.00,0.83,0.47),
+		"out": Color("#ffd479"),
+		"in": Color("#7fdbff"),
+		"dangling": Color("#ff6b8a"),
+		"inline": Color("#b49bff"),
+		"path": Color("#86e5d0"),
+		"impact": Color("#ffab70"),
+		"pulse": Color("#ffffff"),
 	},
 	"paper_light": {
 		"label": "Paper (light)",
-		"tree_edge": Color(0.20,0.35,0.55),
-		"cross_edge": Color(0.60,0.35,0.15),
-		"orphan_edge": Color(0.65,0.35,0.25),
-		"proxied": Color(0.05,0.55,0.52),
-		"duplicated": Color(0.72,0.45,0.05),
-		"embed_link": Color(0.49,0.23,0.76),
-		"folder_link": Color(0.06,0.48,0.45),
-		"path": Color(0.10,0.50,0.22),
-		"blast": Color(0.71,0.19,0.06),
-		"blast_far": Color(0.55,0.35,0.25),
-		"pulse": Color(0.15,0.45,0.35),
-		"highlight": Color(0.60,0.40,0.00),
+		"out": Color("#b8620a"),
+		"in": Color("#1f6feb"),
+		"dangling": Color("#c1121f"),
+		"inline": Color("#7d3ac1"),
+		"path": Color("#1a7f37"),
+		"impact": Color("#b4310f"),
+		"pulse": Color("#0d7d78"),
 	},
 }
 
 const DEFAULT_CONNECTION_THEME := "godot_dark"
+static var CUSTOM_CONNECTION_THEMES := {}
 
 
 static func connection_theme_ids() -> Array:
-	var ids: Array = CONNECTION_THEMES.keys()
+	var ids: Array = CONNECTION_THEMES.keys() + CUSTOM_CONNECTION_THEMES.keys()
 	ids.sort()
 	return ids
 
 
 static func connection_label_of(theme_id: String) -> String:
-	return String(CONNECTION_THEMES.get(theme_id, CONNECTION_THEMES[DEFAULT_CONNECTION_THEME])["label"])
+	return String(CUSTOM_CONNECTION_THEMES.get(
+		theme_id, CONNECTION_THEMES.get(theme_id, CONNECTION_THEMES[DEFAULT_CONNECTION_THEME])
+	)["label"])
 
 
 ## All connection colour keys, in display order.
-const CONNECTION_KEYS := ["tree_edge", "cross_edge", "orphan_edge", "proxied", "duplicated", "embed_link", "folder_link", "path", "blast", "blast_far", "pulse", "highlight"]
+const CONNECTION_KEYS := ["out", "in", "dangling", "inline", "path", "impact", "pulse"]
 
 
 static func connection_color(theme_id: String, key: String) -> Color:
-	var palette: Dictionary = CONNECTION_THEMES.get(theme_id, CONNECTION_THEMES[DEFAULT_CONNECTION_THEME])
-	return palette.get(key, Color(0.7, 0.7, 0.7))
+	var selected: Dictionary = CUSTOM_CONNECTION_THEMES.get(
+		theme_id, CONNECTION_THEMES.get(theme_id, CONNECTION_THEMES[DEFAULT_CONNECTION_THEME])
+	)
+	return selected.get(key, Color(0.7, 0.7, 0.7))
+
+
+static func clear_custom_themes() -> void:
+	CUSTOM_THEMES.clear()
+	CUSTOM_CONNECTION_THEMES.clear()
+
+
+static func register_custom_theme(scope: String, theme_id: String, definition: Dictionary) -> void:
+	if scope == "connections":
+		CUSTOM_CONNECTION_THEMES[theme_id] = definition
+	else:
+		CUSTOM_THEMES[theme_id] = definition
+
+
+static func is_custom_theme(scope: String, theme_id: String) -> bool:
+	return (
+		CUSTOM_CONNECTION_THEMES.has(theme_id)
+		if scope == "connections" else CUSTOM_THEMES.has(theme_id)
+	)
