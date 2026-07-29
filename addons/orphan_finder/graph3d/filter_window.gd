@@ -18,6 +18,7 @@ var _extension_list: VBoxContainer
 var _custom_input: LineEdit
 var _custom_extensions: Array = []
 var _project_extensions: Array = []
+var _intro: Label
 
 
 func _init() -> void:
@@ -37,11 +38,11 @@ func _init() -> void:
 	var root_box := VBoxContainer.new()
 	margin.add_child(root_box)
 
-	var intro := Label.new()
-	intro.text = "Unchecked items are removed from the graph entirely, which also simplifies the layout."
-	intro.autowrap_mode = TextServer.AUTOWRAP_WORD
-	intro.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
-	root_box.add_child(intro)
+	_intro = Label.new()
+	_intro.text = "Unchecked items are removed from the graph entirely, which also simplifies the layout."
+	_intro.autowrap_mode = TextServer.AUTOWRAP_WORD
+	_intro.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
+	root_box.add_child(_intro)
 
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -116,6 +117,14 @@ func _init() -> void:
 	close_button.text = "Close"
 	close_button.pressed.connect(func(): hide())
 	footer.add_child(close_button)
+
+
+## The same checklist serves two deliberately different jobs: structural
+## filtering and display-only visibility. The owner supplies the semantics.
+func set_presentation(window_title: String, explanation: String) -> void:
+	title = window_title
+	if _intro != null:
+		_intro.text = explanation
 
 
 ## Rebuilds the extension list from what the project actually contains, plus

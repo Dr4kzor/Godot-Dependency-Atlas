@@ -347,6 +347,9 @@ var _isolate_set := {}
 var _hidden_kinds := {}
 var _cycles_label: RichTextLabel
 var _filter_window: Window
+var _visibility_window: Window
+var _view_hidden_kinds := {}
+var _view_hidden_extensions := {}
 var _legend_window: Window
 var _open_dialog: FileDialog
 var _scan_root := "res://"
@@ -726,7 +729,18 @@ func _is_hidden(path: String) -> bool:
 
 ## In isolate mode only the selection and its direct neighbours are drawn.
 ## Everything keeps its layout position, so toggling back is not disorienting.
+func _is_view_hidden(path: String) -> bool:
+	if path == ORPHAN_HUB or path == CLUSTER_HUB or _dir_nodes.has(path):
+		return false
+	var actual := _resolve_proxy(path)
+	if _view_hidden_kinds.has(int(TypeIcons.kind_of(actual))):
+		return true
+	return _view_hidden_extensions.has(actual.get_extension().to_lower())
+
+
 func _is_displayed(path: String) -> bool:
+	if _is_view_hidden(path):
+		return false
 	if not _isolate_mode or _selected == "":
 		return true
 	return _isolate_set.has(path)
@@ -2537,12 +2551,15 @@ func _update_status() -> void:
 			float(_metrics["tangle_index"]), String(_metrics["tangle_band"]),
 			(_metrics["cycles"] as Array).size()
 		]
+	var visibility_note := ""
+	if not _view_hidden_kinds.is_empty() or not _view_hidden_extensions.is_empty():
+		visibility_note = "  |  view-hidden %d type(s)" % (_view_hidden_kinds.size() + _view_hidden_extensions.size())
 	var reliability := "" if _godot_pass_used else "  |  [EXTERNAL PROJECT — reduced accuracy]"
 	if _deletion.is_granted():
 		reliability += "  |  DELETION ENABLED (%d moved to trash)" % _deletion.deleted_count()
 	_status_label.text = "%s  |  %d reachable, %d orphan(s)  |  sidecars %s%s%s%s%s" % [
 		mode_name, _graph.size(), _orphan_set.size(),
-		"shown" if _show_sidecars else "hidden", tangle, icon_note, heat_note, reliability
+		"shown" if _show_sidecars else "hidden", tangle, icon_note, heat_note + visibility_note, reliability
 	]
 
 
@@ -2804,6 +2821,8 @@ func _rebuild_edges() -> void:
 			var child_path: String = key
 			var parent_dir := String(child_path).get_base_dir()
 			if parent_dir == child_path or not _positions.has(parent_dir):
+				continue
+			if not _is_displayed(child_path) or not _is_displayed(parent_dir):
 				continue
 			_add_edge(im, parent_dir, child_path, _theme_tree_edge, related)
 
@@ -3690,6 +3709,12 @@ func _build_ui() -> void:
 	left_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	left_header.add_child(left_title)
 
+	var visibility_button := Button.new()
+	visibility_button.text = "Visibility"
+	visibility_button.tooltip_text = "Temporarily hide file types without changing analysis or layout"
+	visibility_button.pressed.connect(_open_visibility_window)
+	left_header.add_child(visibility_button)
+
 	var filter_button := Button.new()
 	filter_button.text = "Filters"
 	filter_button.tooltip_text = "Hide file kinds or individual extensions, and add custom ones (K)"
@@ -3887,9 +3912,16 @@ func _build_ui() -> void:
 	layer.add_child(_node_menu)
 
 	_filter_window = FilterWindow.new()
+	_filter_window.set_presentation("Filters", "Unchecked items are removed from the graph entirely, which also simplifies the layout.")
 	_filter_window.filters_changed.connect(_on_filters_changed)
 	_filter_window.hide()
 	add_child(_filter_window)
+
+	_visibility_window = FilterWindow.new()
+	_visibility_window.set_presentation("Visibility", "Unchecked items are hidden from every view only. Analysis, metrics, relationships and layout stay fully computed.")
+	_visibility_window.filters_changed.connect(_on_visibility_changed)
+	_visibility_window.hide()
+	add_child(_visibility_window)
 
 	_legend_window = LegendWindow.new()
 	_legend_window.palette_selected.connect(_on_theme_changed)
@@ -4044,6 +4076,8 @@ func _populate_file_tree() -> void:
 	for p in _all_paths():
 		var path: String = p
 		if path == ORPHAN_HUB or path == CLUSTER_HUB or path.begins_with(PROXY_PREFIX):
+			continue
+		if _is_view_hidden(path):
 			continue
 		if _filter_text != "" and not path.get_file().to_lower().contains(_filter_text):
 			continue
@@ -4407,6 +4441,17 @@ func _open_filter_window() -> void:
 	_filter_window.popup_centered()
 
 
+func _open_visibility_window() -> void:
+	_release_mouse()
+	var extensions: Array = _project_extensions.keys()
+	extensions.sort()
+	_visibility_window.configure(
+		extensions, _view_hidden_kinds.keys(), _view_hidden_extensions.keys(),
+		_custom_extensions
+	)
+	_visibility_window.popup_centered()
+
+
 ## Both palette windows share one implementation and differ only in which
 ## colours they list, so their signal wiring is shared too.
 func _connect_palette_window(window) -> void:
@@ -4564,6 +4609,25 @@ func _on_filters_changed(hidden_kinds: Array, hidden_extensions: Array, custom_e
 	])
 
 
+func _on_visibility_changed(hidden_kinds: Array, hidden_extensions: Array, custom_extensions: Array) -> void:
+	_view_hidden_kinds.clear()
+	for k in hidden_kinds:
+		_view_hidden_kinds[int(k)] = true
+	_view_hidden_extensions.clear()
+	for e in hidden_extensions:
+		_view_hidden_extensions[String(e)] = true
+	_custom_extensions = custom_extensions.duplicate()
+	if _selected != "" and _is_view_hidden(_selected):
+		_selected = ""
+		_update_info()
+	await _refresh_visuals()
+	_populate_file_tree()
+	_save_settings()
+	_show_toast("Visibility updated — %d kind(s), %d extension(s) hidden; layout unchanged" % [
+		_view_hidden_kinds.size(), _view_hidden_extensions.size()
+	])
+
+
 func _on_theme_changed(theme_id: String) -> void:
 	_apply_theme(theme_id)
 	await _refresh_visuals()
@@ -4577,6 +4641,8 @@ func _save_settings() -> void:
 		"hidden_kinds": _hidden_kinds.keys(),
 		"hidden_extensions": _hidden_extensions.keys(),
 		"custom_extensions": _custom_extensions,
+		"view_hidden_kinds": _view_hidden_kinds.keys(),
+		"view_hidden_extensions": _view_hidden_extensions.keys(),
 		"theme": _theme_id,
 		"connection_theme": _connection_theme_id,
 		"colour_overrides": _overrides.to_flat(),
@@ -4596,6 +4662,12 @@ func _load_settings() -> void:
 	for e in settings["hidden_extensions"]:
 		_hidden_extensions[String(e)] = true
 	_custom_extensions = Array(settings["custom_extensions"])
+	_view_hidden_kinds.clear()
+	for k in settings.get("view_hidden_kinds", []):
+		_view_hidden_kinds[int(k)] = true
+	_view_hidden_extensions.clear()
+	for e in settings.get("view_hidden_extensions", []):
+		_view_hidden_extensions[String(e)] = true
 	_gather_enabled = bool(settings.get("gather_relations", false))
 	_show_embed_links = bool(settings.get("show_embed_links", true))
 	_connection_theme_id = String(settings.get("connection_theme", OFThemes.DEFAULT_CONNECTION_THEME))

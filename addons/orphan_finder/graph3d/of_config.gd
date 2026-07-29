@@ -76,6 +76,8 @@ static func default_settings() -> Dictionary:
 		"hidden_kinds": [],
 		"hidden_extensions": [],
 		"custom_extensions": [],
+		"view_hidden_kinds": [],
+		"view_hidden_extensions": [],
 		"theme": "godot_dark",
 		"connection_theme": "godot_dark",
 		"colour_overrides": {},
@@ -98,6 +100,8 @@ static func load_settings(root: String) -> Dictionary:
 	settings["hidden_kinds"] = Array(cfg.get_value("filters", "hidden_kinds", []))
 	settings["hidden_extensions"] = Array(cfg.get_value("filters", "hidden_extensions", []))
 	settings["custom_extensions"] = Array(cfg.get_value("filters", "custom_extensions", []))
+	settings["view_hidden_kinds"] = Array(cfg.get_value("visibility", "hidden_kinds", []))
+	settings["view_hidden_extensions"] = Array(cfg.get_value("visibility", "hidden_extensions", []))
 	settings["theme"] = String(cfg.get_value("display", "theme", "godot_dark"))
 	settings["connection_theme"] = String(cfg.get_value("display", "connection_theme", "godot_dark"))
 	# Stored flat ("scope/theme/key" -> Color) because nested dictionaries do
@@ -117,6 +121,8 @@ static func save_settings(root: String, settings: Dictionary) -> String:
 	cfg.set_value("filters", "hidden_kinds", settings.get("hidden_kinds", []))
 	cfg.set_value("filters", "hidden_extensions", settings.get("hidden_extensions", []))
 	cfg.set_value("filters", "custom_extensions", settings.get("custom_extensions", []))
+	cfg.set_value("visibility", "hidden_kinds", settings.get("view_hidden_kinds", []))
+	cfg.set_value("visibility", "hidden_extensions", settings.get("view_hidden_extensions", []))
 	cfg.set_value("display", "theme", settings.get("theme", "godot_dark"))
 	cfg.set_value("display", "connection_theme", settings.get("connection_theme", "godot_dark"))
 	cfg.set_value("display", "colour_overrides", settings.get("colour_overrides", {}))
