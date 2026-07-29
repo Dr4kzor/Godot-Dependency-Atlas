@@ -1,0 +1,10 @@
+# Orphan Finder
+# Scan reports are machine-local and change on every run, so they are not
+# tracked. The config file IS tracked deliberately: filter and theme choices
+# are project decisions worth sharing across a team.
+logs/
+*.log
+
+# deleted.log is tracked deliberately: it is the record of what this tool
+# removed, which is exactly the kind of thing a team wants in history.
+!deleted.log

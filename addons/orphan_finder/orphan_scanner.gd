@@ -29,10 +29,12 @@ extends RefCounted
 ## "dynamic directory" handling below).
 
 ## Directories never descended into during inventory.
-const SKIP_DIRS := [".godot", ".git", ".import", "refactor_log", "orphan_scan_log"]
+const SKIP_DIRS := [".godot", ".git", ".import", "refactor_log", "orphan_scan_log", "orphan_finder"]
 
 ## Where scan reports are written.
-const LOG_DIR := "res://orphan_scan_log"
+## Log destination; set alongside scan_root so external scans write into
+## the scanned project rather than this one.
+static var log_dir := "res://orphan_finder/logs"
 
 ## Files whose contents are read looking for outgoing references.
 ## "uid" matters more than it looks: Godot can reference an attached script
@@ -42,6 +44,12 @@ const LOG_DIR := "res://orphan_scan_log"
 const READABLE_EXTENSIONS := [
 	"tscn", "tres", "scn", "res", "gd", "cs", "gdshader", "gdshaderinc",
 	"cfg", "godot", "json", "gdextension", "import", "uid",
+	# Plain data/config formats. A project that keeps a list of asset paths in
+	# an .ini or .csv is pointing at real files, and skipping those formats
+	# broke the chain: the data file looked unused AND everything it pointed
+	# at looked unused too.
+	"ini", "txt", "csv", "tsv", "xml", "yml", "yaml", "toml", "conf",
+	"properties", "md", "po", "pot",
 ]
 
 ## Sidecar files owned by another file -- never reported on their own, and
@@ -61,6 +69,33 @@ const ALWAYS_KEEP_EXTENSIONS := ["md", "txt", "gitignore", "gitattributes"]
 ## Yield to the editor between units of work so the UI stays responsive.
 const YIELD_EVERY_N := 20
 
+## Directory the scan reads from. "res://" means the running project; any
+## other value points at an external Godot project opened for inspection.
+##
+## Paths inside the graph stay in logical res:// form regardless, because
+## that is how references are written inside a project's own files. Only disk
+## access is redirected, through _disk_path().
+static var scan_root := "res://"
+
+
+## Resource formats Godot itself can enumerate dependencies for. Binary
+## .scn/.res have no reliable plain-text paths at all, and even text formats
+## hide references behind sub-resource ids, so asking Godot beats guessing.
+const GODOT_DEPENDENCY_EXTENSIONS := ["scn", "res", "tscn", "tres", "material", "mesh"]
+
+
+## True when the scan targets the project this addon is running inside.
+## ResourceLoader only knows about that project, so the authoritative pass is
+## unavailable for anything else.
+static func scanning_current_project() -> bool:
+	return scan_root == "res://"
+
+
+static func _disk_path(logical: String) -> String:
+	if scan_root == "res://":
+		return logical
+	return scan_root.trim_suffix("/") + "/" + logical.trim_prefix("res://")
+
 ## Binary files above this are read only up to this many bytes. Godot binary
 ## formats put their resource/uid table near the front, so references are
 ## almost always well within this, but see the log note if any file hits it.
@@ -69,6 +104,9 @@ const MAX_BINARY_READ_BYTES := 8 * 1024 * 1024
 ## Null bytes are neutralised in chunks this size, yielding between chunks,
 ## so a large binary file can't freeze the editor.
 const NULL_SCRUB_CHUNK := 262144
+
+## Longest plausible file extension, used to sanity-check loose references.
+const MAX_LOOSE_EXTENSION := 10
 
 const PATH_CONTINUATION_CHARS := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
 const WORD_CONTINUATION_CHARS := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
@@ -88,8 +126,12 @@ const WORD_CONTINUATION_CHARS := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRST
 static func scan_async(progress: Callable = Callable()) -> Dictionary:
 	var main_loop := Engine.get_main_loop()
 
-	if Engine.is_editor_hint():
-		EditorInterface.get_resource_filesystem().scan()
+	# Refresh Godot's own cached view of the filesystem when running inside
+	# the editor. Fetched as a singleton by name rather than referenced
+	# directly, so this script stays loadable when run from a live scene
+	# (the 3D graph viewer) where EditorInterface may not be available.
+	if Engine.is_editor_hint() and Engine.has_singleton("EditorInterface"):
+		Engine.get_singleton("EditorInterface").get_resource_filesystem().scan()
 
 	# ---------- 1. INVENTORY ----------
 	if progress.is_valid():
@@ -168,10 +210,21 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 	# graph is kept (not just a reachable set) because it's the thing that
 	# explains a result -- if a file is wrongly reported as an orphan, the
 	# graph shows exactly which parent failed to mention it.
+	var basename_index := _build_basename_index(file_set)
+
+	# Authoritative pass, unioned with the text scan below. The two find
+	# different things: Godot knows every real resource dependency including
+	# binary formats, while the text scan sees bare filenames, paths inside
+	# data files and class_name usage that Godot has no concept of.
+	if progress.is_valid():
+		progress.call("asking Godot for dependencies", 0, all_files.size())
+	var godot_deps := await godot_dependencies_async(all_files, progress, main_loop)
+
 	var roots := _find_roots(content_cache, file_set)
 	if roots.is_empty():
 		return {
-			"orphans": [], "roots": [], "dynamic_dirs": [], "graph": {}, "unresolved_refs": [],
+			"orphans": [], "roots": [], "dynamic_dirs": [], "graph": {}, "unresolved_refs": [], "log_text": "", "orphan_graph": {}, "hierarchy": {}, "godot_pass_used": false, "godot_dependency_files": 0,
+			"edge_kinds": {}, "depth": {}, "tree_parent": {},
 			"reachable_count": 0, "total_files": all_files.size(),
 			"truncated_files": truncated,
 			"error": "No entry points found. Expected a main scene (run/main_scene) in project.godot. Without a starting point, reachability can't be determined and every file would look like an orphan -- refusing to report a misleading result.",
@@ -179,12 +232,17 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 
 	var graph := {}      # file -> Array[String] of references found inside it
 	var seen := {}       # file -> true, set only AFTER the file is fully parsed
+	var depth := {}      # file -> BFS distance from an entry point
+	var tree_parent := {}  # file -> whoever first reached it (spanning tree edge)
 	var dynamic_dirs: Array = []
 	var unresolved_refs: Array = []
+	var edge_kinds := {}   # parent -> { child -> how the reference was found }
 	var queue: Array = []
 	for r in roots:
 		var rd: Dictionary = r
-		queue.append(String(rd["path"]))
+		var root_path := String(rd["path"])
+		depth[root_path] = 0
+		queue.append(root_path)
 
 	var processed := 0
 	while not queue.is_empty():
@@ -199,7 +257,7 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 
 		# Sidecars belong to their owner: if the owner is live, so are they.
 		for suffix in SIDECAR_SUFFIXES:
-			var sidecar :String = current + suffix
+			var sidecar: String = current + suffix
 			if file_set.has(sidecar) and not found.has(sidecar):
 				found.append(sidecar)
 
@@ -209,13 +267,36 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 			if file_set.has(source) and not found.has(source):
 				found.append(source)
 
+		# Godot's own dependency list first: it is authoritative, and marking
+		# these before the text pass means a reference found by both keeps the
+		# stronger attribution.
+		for dep_any in godot_deps.get(current, []):
+			var dep_path: String = dep_any
+			if dep_path != current and file_set.has(dep_path) and not found.has(dep_path):
+				found.append(dep_path)
+				if not edge_kinds.has(current):
+					edge_kinds[current] = {}
+				edge_kinds[current][dep_path] = "godot"
+
 		var content := String(content_cache.get(current, ""))
 		if content != "":
-			var outgoing := _extract_references(content, file_set, dir_set, uid_to_path, class_to_path)
+			var ext_now := current.get_extension().to_lower()
+			var code_content := ""
+			if ext_now == "gd" or ext_now == "cs":
+				code_content = _strip_code_noise(content)
+			var outgoing := _extract_references(
+				content, code_content, file_set, dir_set, uid_to_path, class_to_path,
+				basename_index
+			)
+			var kinds: Dictionary = outgoing["kinds"]
 			for ref in outgoing["files"]:
 				var ref_path: String = ref
 				if ref_path != current and not found.has(ref_path):
 					found.append(ref_path)
+				if kinds.has(ref_path):
+					if not edge_kinds.has(current):
+						edge_kinds[current] = {}
+					edge_kinds[current][ref_path] = String(kinds[ref_path])
 			for ur in outgoing["unresolved"]:
 				unresolved_refs.append({"in_file": current, "reference": String(ur)})
 			for dref in outgoing["dirs"]:
@@ -238,9 +319,16 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 		processed += 1
 
 		# --- queue anything we haven't already parsed ---
+		# Depth/parent are fixed at FIRST enqueue. With a FIFO queue that's
+		# the shortest path from an entry point, and it's what defines the
+		# spanning tree used for layout: extra references to an
+		# already-placed file become cross-links rather than moving it.
 		for ref2 in found:
 			var next_path: String = ref2
 			if not seen.has(next_path):
+				if not depth.has(next_path):
+					depth[next_path] = int(depth.get(current, 0)) + 1
+					tree_parent[next_path] = current
 				queue.append(next_path)
 
 		if progress.is_valid():
@@ -260,13 +348,68 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 			continue
 		orphans.append({"path": p4, "size": _file_size(p4)})
 
-	_write_log(orphans, roots, dynamic_dirs, graph, unresolved_refs, seen.size(), all_files.size(), truncated)
+	# Orphans were never traversed, so nothing recorded what THEY reference --
+	# graph[] only has entries for files the walk actually reached. Without
+	# this pass every orphan looks isolated, and a dead subsystem of five
+	# mutually-referencing files renders as five unrelated dots.
+	#
+	# Kept in its own map: it is display information only, and must not leak
+	# into reachability, the orphan list, or the coupling metrics.
+	var orphan_graph := {}
+	var orphan_index := 0
+	for entry_any in orphans:
+		var orphan_entry: Dictionary = entry_any
+		var orphan_path: String = orphan_entry["path"]
+		var orphan_content := String(content_cache.get(orphan_path, ""))
+		orphan_index += 1
+		if orphan_content == "":
+			continue
+		var orphan_code := ""
+		var orphan_ext := orphan_path.get_extension().to_lower()
+		if orphan_ext == "gd" or orphan_ext == "cs":
+			orphan_code = _strip_code_noise(orphan_content)
+		var orphan_out := _extract_references(
+			orphan_content, orphan_code, file_set, dir_set, uid_to_path,
+			class_to_path, basename_index
+		)
+		var orphan_refs: Array = []
+		for dep_any in godot_deps.get(orphan_path, []):
+			var orphan_dep: String = dep_any
+			if orphan_dep != orphan_path and file_set.has(orphan_dep):
+				orphan_refs.append(orphan_dep)
+		for r in orphan_out["files"]:
+			var ref_path: String = r
+			if ref_path != orphan_path and not (ref_path in orphan_refs):
+				orphan_refs.append(ref_path)
+		if not orphan_refs.is_empty():
+			orphan_graph[orphan_path] = orphan_refs
+		if progress.is_valid() and orphan_index % 5 == 0:
+			progress.call("mapping orphan links", orphan_index, orphans.size())
+		if main_loop is SceneTree and (orphan_index % YIELD_EVERY_N == 0):
+			await (main_loop as SceneTree).process_frame
+
+	if progress.is_valid():
+		progress.call("checking duplicated content", 0, orphans.size())
+	_find_duplicated_content(orphans, content_cache, seen, progress)
+
+	if progress.is_valid():
+		progress.call("writing report", 0, -1)
+
+	var log_text := build_log_text(orphans, roots, dynamic_dirs, graph, unresolved_refs, seen.size(), all_files.size(), truncated, scanning_current_project(), godot_deps.size())
 
 	return {
+		"hierarchy": extract_hierarchy(content_cache, class_to_path),
 		"orphans": orphans,
+		"godot_pass_used": scanning_current_project(),
+		"godot_dependency_files": godot_deps.size(),
+		"orphan_graph": orphan_graph,
+		"log_text": log_text,
 		"roots": roots,
 		"dynamic_dirs": dynamic_dirs,
 		"graph": graph,
+		"edge_kinds": edge_kinds,
+		"depth": depth,
+		"tree_parent": tree_parent,
 		"unresolved_refs": unresolved_refs,
 		"reachable_count": seen.size(),
 		"total_files": all_files.size(),
@@ -372,17 +515,32 @@ static func _cfg_section_values(content: String, section_name: String) -> Array:
 # ---------------------------------------------------------------- references
 
 ## Pulls every outgoing reference out of one file's content.
-## Returns { "files": Array, "dirs": Array, "unresolved": Array }.
-## Unresolved references are reported rather than silently dropped -- a
-## reference we can see but can't resolve is the most likely reason a file
-## gets wrongly reported as an orphan, so it needs to be visible.
+## Returns { "files": Array, "dirs": Array, "unresolved": Array, "kinds": Dictionary }.
+## `kinds` records HOW each reference was found, which lets downstream
+## consumers weigh them: a path or uid reference is unambiguous, whereas a
+## bare class_name match found only in a comment is a guess.
+## code_content should be the file with comments/strings stripped, or "" for
+## non-code files.
 static func _extract_references(
-	content: String, file_set: Dictionary, dir_set: Dictionary,
-	uid_to_path: Dictionary, class_to_path: Dictionary
+	content: String, code_content: String, file_set: Dictionary, dir_set: Dictionary,
+	uid_to_path: Dictionary, class_to_path: Dictionary, basename_index: Dictionary
 ) -> Dictionary:
 	var files := {}
 	var dirs := {}
 	var unresolved := {}
+	var kinds := {}
+
+	# Structural resource-block parsing first: it is the authoritative source
+	# for .tscn/.tres dependencies, including uid-only declarations that no
+	# amount of res:// token scanning could find.
+	var blocks := _extract_resource_block_refs(content, file_set, uid_to_path)
+	var block_found: Dictionary = blocks["found"]
+	for key in block_found.keys():
+		var block_path: String = key
+		files[block_path] = true
+		kinds[block_path] = String(block_found[block_path])
+	for u in blocks["unresolved"]:
+		unresolved[String(u)] = true
 
 	# res:// path literals -- covers instanced scenes, preloads, ext_resource
 	# path= fields, and anything else written as an explicit path.
@@ -391,6 +549,8 @@ static func _extract_references(
 		var resolved := _longest_known_prefix(t, file_set)
 		if resolved != "":
 			files[resolved] = true
+			if not kinds.has(resolved):
+				kinds[resolved] = "path"
 			continue
 		var dir_resolved := _longest_known_prefix(t, dir_set)
 		if dir_resolved != "":
@@ -404,19 +564,312 @@ static func _extract_references(
 		var target := _resolve_uid(u, uid_to_path)
 		if target != "" and file_set.has(target):
 			files[target] = true
+			if not kinds.has(target):
+				kinds[target] = "uid"
 		else:
 			unresolved[u] = true
 
-	# Global class_name usage, e.g. `Item.new()` or `extends Item`.
+	# Loose references inside quoted literals: bare filenames, relative
+	# paths, and absolute paths written on some other machine.
+	for literal in _extract_quoted_literals(content):
+		var lit: String = literal
+		if lit.begins_with("res://") or lit.begins_with("uid://"):
+			continue  # already handled precisely above
+		var loose := _resolve_loose_reference(lit, basename_index)
+		if loose != "" and not kinds.has(loose):
+			files[loose] = true
+			kinds[loose] = "filename"
+
+	# Global class_name usage, e.g. `Item.new()` or `extends Item`. Matched
+	# against stripped code when available so comment mentions are demoted
+	# to "class_name_weak" rather than counted as real dependencies.
+	var searchable := code_content if code_content != "" else content
 	for key in class_to_path.keys():
 		var cls: String = key
 		var target2: String = class_to_path[cls]
-		if files.has(target2):
+		if kinds.has(target2) and String(kinds[target2]) != "class_name_weak":
 			continue
-		if _word_contains(content, cls):
+		if _word_contains(searchable, cls):
 			files[target2] = true
+			kinds[target2] = "class_name"
+		elif code_content != "" and _word_contains(content, cls):
+			# Present in the file, but only inside a comment or string.
+			files[target2] = true
+			kinds[target2] = "class_name_weak"
 
-	return {"files": files.keys(), "dirs": dirs.keys(), "unresolved": unresolved.keys()}
+	return {"files": files.keys(), "dirs": dirs.keys(), "unresolved": unresolved.keys(), "kinds": kinds}
+
+
+## Pulls out every quoted string literal, which is where loose file
+## references live: FileAccess.open("recent_files.ini"), a path stored in a
+## data file, a relative filename in a config. None of those contain "res://"
+## so path-token extraction alone never sees them.
+static func _extract_quoted_literals(content: String) -> Array:
+	var out: Array = []
+	var i := 0
+	var length := content.length()
+	while i < length:
+		var c: String = content[i]
+		if c == "\"" or c == "'":
+			var quote := c
+			var j := i + 1
+			var literal := ""
+			while j < length and content[j] != quote:
+				if content[j] == "\\":
+					j += 2
+					continue
+				literal += content[j]
+				j += 1
+			if literal != "":
+				out.append(literal)
+			i = j + 1
+			continue
+		i += 1
+	return out
+
+
+## filename -> every project file with that filename.
+## Reads `extends` and `class_name` to recover the code hierarchy.
+##
+## Inheritance is far stronger evidence of structure than a shared filename
+## prefix: RA_AddVoxel and RA_RemoveVoxel share a prefix but are siblings, not
+## collaborators -- they use their base class and never each other. Laying
+## them out as one flat cluster hides precisely the shape that matters.
+##
+## Returns { "parent_of": path -> parent path, "class_of": path -> class_name }.
+static func extract_hierarchy(content_cache: Dictionary, class_to_path: Dictionary) -> Dictionary:
+	var class_of := {}
+	var extends_name := {}
+	var local_consts := {}      # path -> { const name -> preloaded path }
+
+	for key in content_cache.keys():
+		var path: String = key
+		if not (path.get_extension().to_lower() in ["gd"]):
+			continue
+		var content := String(content_cache[path])
+		for raw_line in content.split("\n"):
+			var line := String(raw_line).strip_edges()
+			if line.begins_with("class_name "):
+				var declared := line.substr(11).strip_edges()
+				var comma := declared.find(",")
+				if comma != -1:
+					declared = declared.substr(0, comma).strip_edges()
+				if declared != "":
+					class_of[path] = declared
+			elif line.begins_with("extends "):
+				var base := line.substr(8).strip_edges()
+				# `extends "res://foo.gd"` is a path, not a class name.
+				if base.begins_with("\"") or base.begins_with("'"):
+					base = base.replace("\"", "").replace("'", "")
+				extends_name[path] = base
+			elif line.begins_with("const ") and line.contains("preload("):
+				# `const RA = preload("res://.../ReversableAction.gd")` followed
+				# by `extends RA` is a common way to subclass without declaring
+				# a class_name. Without this the parent is never resolved and
+				# the hierarchy looks flat.
+				var name_end := line.find("=")
+				if name_end > 6:
+					var const_name := line.substr(6, name_end - 6).strip_edges()
+					var quote := line.find("\"", name_end)
+					var quote_end := line.find("\"", quote + 1)
+					if quote != -1 and quote_end != -1:
+						var target := line.substr(quote + 1, quote_end - quote - 1)
+						if target.begins_with("res://"):
+							if not local_consts.has(path):
+								local_consts[path] = {}
+							local_consts[path][const_name] = target
+			# Only the header matters; stop at the first function. `var` is no
+			# longer a stop condition because `const X = preload(...)` often
+			# sits after exported variables.
+			if line.begins_with("func "):
+				break
+
+	var parent_of := {}
+	for key2 in extends_name.keys():
+		var child: String = key2
+		var base_name := String(extends_name[child])
+		if base_name.begins_with("res://"):
+			if content_cache.has(base_name):
+				parent_of[child] = base_name
+			continue
+		# Resolve by class_name, either declared locally or globally indexed.
+		var resolved := ""
+		# A preload constant in the same file resolves directly to a path.
+		var consts: Dictionary = local_consts.get(child, {})
+		if consts.has(base_name):
+			var const_target := String(consts[base_name])
+			if content_cache.has(const_target):
+				parent_of[child] = const_target
+				continue
+		for key3 in class_of.keys():
+			if String(class_of[key3]) == base_name:
+				resolved = String(key3)
+				break
+		if resolved == "" and class_to_path.has(base_name):
+			resolved = String(class_to_path[base_name])
+		if resolved != "" and resolved != child:
+			parent_of[child] = resolved
+
+	return {"parent_of": parent_of, "class_of": class_of}
+
+
+static func _build_basename_index(file_set: Dictionary) -> Dictionary:
+	var index := {}
+	for key in file_set.keys():
+		var path: String = key
+		var base := path.get_file()
+		if not index.has(base):
+			index[base] = []
+		index[base].append(path)
+	return index
+
+
+## Resolves a reference that isn't a res:// path -- a bare filename, a
+## relative path, or an absolute OS path from another machine -- by matching
+## on filename and then preferring whichever candidate agrees with the most
+## trailing path components.
+##
+## This is how an entry like "/home/someone/Projects/Foo/models/test.voxel"
+## inside a data file still resolves to res://models/test.voxel.
+static func _resolve_loose_reference(token: String, basename_index: Dictionary) -> String:
+	var normalised := token.replace("\\", "/")
+	var base := normalised.get_file()
+	if base == "" or base.find(".") == -1:
+		return ""
+	var ext := base.get_extension()
+	if ext == "" or ext.length() > MAX_LOOSE_EXTENSION or ext.is_valid_int():
+		return ""
+	if not basename_index.has(base):
+		return ""
+
+	var candidates: Array = basename_index[base]
+	if candidates.size() == 1:
+		return String(candidates[0])
+
+	var best := ""
+	var best_score := -1
+	for c in candidates:
+		var candidate: String = c
+		var score := _suffix_agreement(candidate, normalised)
+		if score > best_score:
+			best_score = score
+			best = candidate
+	return best
+
+
+## How many trailing path components two paths share.
+static func _suffix_agreement(project_path: String, token: String) -> int:
+	var a := project_path.trim_prefix("res://").split("/")
+	var b := token.split("/")
+	var n := 0
+	while n < mini(a.size(), b.size()) and a[a.size() - 1 - n] == b[b.size() - 1 - n]:
+		n += 1
+	return n
+
+
+## Reads [ext_resource] and [sub_resource] headers structurally, pulling both
+## the path and the uid attribute from each.
+##
+## Resource files shouldn't depend on generic res:// token scanning: a
+## dependency can be declared with a uid and no path at all --
+##   [ext_resource type="Shader" uid="uid://cabc" id="1_sh"]
+## -- and then only referenced as ExtResource("1_sh") further down. Nothing in
+## that file contains the shader's path, so token scanning finds nothing and
+## the shader looks unused. Parsing the header and resolving the uid is the
+## only reliable way to see it.
+## Longest line worth using as a fingerprint when looking for duplicated
+## content. Short lines match by coincidence; enormous ones are usually
+## minified data.
+const PROBE_MIN_LENGTH := 40
+const PROBE_MAX_LENGTH := 300
+const MAX_DUPLICATE_CHECKS := 400
+
+
+## For each orphan, checks whether its content appears verbatim inside a file
+## that IS reachable.
+##
+## This exists because of a genuinely confusing case: a shader saved as its own
+## .tres, whose code was later pasted into a material as an inline
+## [sub_resource] instead of being referenced. The standalone file then has no
+## incoming reference and is correctly an orphan -- but it *looks* used,
+## because its code is visibly running in the project. Saying "this content is
+## duplicated inline in X" turns a baffling result into an actionable one.
+static func _find_duplicated_content(
+	orphans: Array, content_cache: Dictionary, seen: Dictionary,
+	progress: Callable = Callable()
+) -> void:
+	var checked := 0
+	var examined := 0
+	for entry_any in orphans:
+		if checked >= MAX_DUPLICATE_CHECKS:
+			return
+		var entry: Dictionary = entry_any
+		var path: String = entry["path"]
+		var content := String(content_cache.get(path, ""))
+		if content == "":
+			continue
+
+		var probe := _pick_probe(content)
+		examined += 1
+		if progress.is_valid() and examined % 5 == 0:
+			progress.call("checking duplicated content", examined, orphans.size())
+		if probe == "":
+			continue
+		checked += 1
+
+		for key in content_cache.keys():
+			var other: String = key
+			if other == path or not seen.has(other):
+				continue
+			if String(content_cache[other]).find(probe) != -1:
+				entry["duplicated_in"] = other
+				break
+
+
+## Picks the longest reasonably-sized line to fingerprint a file by.
+static func _pick_probe(content: String) -> String:
+	var best := ""
+	for raw_line in content.split("\n"):
+		var line := String(raw_line).strip_edges()
+		if line.length() < PROBE_MIN_LENGTH or line.length() > PROBE_MAX_LENGTH:
+			continue
+		if line.length() > best.length():
+			best = line
+	return best
+
+
+static func _extract_resource_block_refs(
+	content: String, file_set: Dictionary, uid_to_path: Dictionary
+) -> Dictionary:
+	var found := {}
+	var unresolved := {}
+
+	for marker in ["[ext_resource", "[sub_resource"]:
+		var idx := content.find(marker)
+		while idx != -1:
+			var end := content.find("]", idx)
+			if end == -1:
+				break
+			var line := content.substr(idx, end - idx)
+
+			var path_val := _quoted_attr(line, "path")
+			if path_val != "" and file_set.has(path_val):
+				found[path_val] = "path"
+
+			var uid_val := _quoted_attr(line, "uid")
+			if uid_val != "" and not found.has(path_val):
+				var resolved := _resolve_uid(uid_val, uid_to_path)
+				if resolved != "" and file_set.has(resolved):
+					found[resolved] = "uid"
+				elif path_val == "":
+					# Declared purely by uid and we couldn't resolve it: worth
+					# surfacing, since it means something is unreachable that
+					# probably shouldn't be.
+					unresolved[uid_val] = true
+
+			idx = content.find(marker, end)
+
+	return {"found": found, "unresolved": unresolved.keys()}
 
 
 static func _extract_res_tokens(content: String) -> Array:
@@ -469,7 +922,9 @@ static func _longest_known_prefix(token: String, known: Dictionary) -> String:
 ## parseable as text. The locally-scanned map is only a fallback for
 ## anything the database hasn't registered.
 static func _resolve_uid(uid_text: String, uid_to_path: Dictionary) -> String:
-	var id := ResourceUID.text_to_id(uid_text)
+	# ResourceUID only knows about the running project, so it is bypassed when
+	# inspecting an external one; harvested uid<->path pairs cover that case.
+	var id := ResourceUID.INVALID_ID if scan_root != "res://" else ResourceUID.text_to_id(uid_text)
 	if id != ResourceUID.INVALID_ID and ResourceUID.has_id(id):
 		var p := ResourceUID.get_id_path(id)
 		if p != "":
@@ -508,6 +963,45 @@ static func _quoted_attr(line: String, attr: String) -> String:
 	if end == -1:
 		return ""
 	return line.substr(start, end - start)
+
+
+## Strips GDScript comments and string literals, leaving only executable
+## code. Used to tell a REAL class reference (`extends Foo`, `Foo.new()`)
+## apart from a passing mention in a docstring or comment.
+##
+## This matters because a base class that documents its own subclasses --
+## "## Subclasses include AddVoxelAction" -- would otherwise create a
+## phantom base -> subclass edge, which pairs with the genuine
+## subclass -> base edge to form a 2-cycle that isn't real.
+static func _strip_code_noise(content: String) -> String:
+	var out: PackedStringArray = []
+	for raw_line in content.split("\n"):
+		var line: String = raw_line
+		var cleaned := ""
+		var in_string := false
+		var quote := ""
+		var i := 0
+		while i < line.length():
+			var c: String = line[i]
+			if in_string:
+				if c == "\\":
+					i += 2
+					continue
+				if c == quote:
+					in_string = false
+				i += 1
+				continue
+			if c == "\"" or c == "'":
+				in_string = true
+				quote = c
+				i += 1
+				continue
+			if c == "#":
+				break
+			cleaned += c
+			i += 1
+		out.append(cleaned)
+	return "\n".join(out)
 
 
 static func _own_uid_of(path: String, content_cache: Dictionary) -> String:
@@ -577,7 +1071,7 @@ static func _word_contains(content: String, word: String) -> bool:
 ## scrubbed to 0x01 first, in yielding chunks so a large file can't freeze
 ## the editor. Every non-null byte is left exactly as-is.
 static func _read_file_async(path: String, main_loop) -> Dictionary:
-	var f := FileAccess.open(path, FileAccess.READ)
+	var f := FileAccess.open(_disk_path(path), FileAccess.READ)
 	if f == null:
 		return {"text": "", "truncated": false}
 	var length := f.get_length()
@@ -602,10 +1096,78 @@ static func _read_file_async(path: String, main_loop) -> Dictionary:
 	return {"text": bytes.get_string_from_ascii(), "truncated": truncated}
 
 
+## Asks Godot for each resource's dependencies.
+##
+## ResourceLoader.get_dependencies() reads a resource's dependency table
+## WITHOUT instantiating it, so there are no script side effects and none of
+## the cost of building objects only to discard them. It is the same
+## deserialisation the editor uses for its own dependency tracking, which
+## makes it authoritative in a way byte-scanning cannot be: a binary .scn
+## stores a MeshLibrary reference as an object pointer, with no path string
+## anywhere in the file for a text scan to find.
+##
+## Returns { file -> Array of res:// paths }.
+static func godot_dependencies_async(
+	files: Array, progress: Callable = Callable(), main_loop = null
+) -> Dictionary:
+	var found := {}
+	if not scanning_current_project():
+		return found   # ResourceLoader only knows the running project
+
+	var total := files.size()
+	for i in total:
+		var path: String = files[i]
+		if not (path.get_extension().to_lower() in GODOT_DEPENDENCY_EXTENSIONS):
+			continue
+		var deps := ResourceLoader.get_dependencies(path)
+		var resolved: Array = []
+		for entry_any in deps:
+			var resolved_path := _clean_dependency(String(entry_any))
+			if resolved_path != "" and resolved_path != path:
+				resolved.append(resolved_path)
+		if not resolved.is_empty():
+			found[path] = resolved
+		if progress.is_valid() and i % 10 == 0:
+			progress.call("asking Godot for dependencies", i + 1, total)
+		if main_loop is SceneTree and (i % YIELD_EVERY_N == 0):
+			await (main_loop as SceneTree).process_frame
+
+	if progress.is_valid():
+		progress.call("asking Godot for dependencies", total, total)
+	return found
+
+
+## Dependency entries arrive as "uid://abc::Type::res://path" or as a plain
+## path, depending on format and Godot version. Pull the usable path out of
+## whichever shape turned up.
+static func _clean_dependency(entry: String) -> String:
+	var text := entry
+	var marker := text.rfind("res://")
+	if marker != -1:
+		var path := text.substr(marker)
+		# A type hint can trail the path ("res://a.tres::MeshLibrary"), which
+		# would never match a real file.
+		var type_marker := path.find("::")
+		if type_marker != -1:
+			path = path.substr(0, type_marker)
+		return path
+	# A uid-only entry: resolve it through Godot's own registry.
+	var uid_marker := text.find("uid://")
+	if uid_marker != -1:
+		var uid_text := text.substr(uid_marker)
+		var separator := uid_text.find("::")
+		if separator != -1:
+			uid_text = uid_text.substr(0, separator)
+		var id := ResourceUID.text_to_id(uid_text)
+		if id != ResourceUID.INVALID_ID and ResourceUID.has_id(id):
+			return ResourceUID.get_id_path(id)
+	return ""
+
+
 static func _collect_files_async(dir_path: String, results: Array, progress: Callable, main_loop) -> void:
-	var dir := DirAccess.open(dir_path)
+	var dir := DirAccess.open(_disk_path(dir_path))
 	if dir == null:
-		push_warning("Orphan Finder: could not open directory %s" % dir_path)
+		push_warning("Orphan Finder: could not open directory %s" % _disk_path(dir_path))
 		return
 	dir.list_dir_begin()
 	var entry := dir.get_next()
@@ -642,7 +1204,7 @@ static func _is_always_kept(path: String) -> bool:
 
 
 static func _file_size(path: String) -> int:
-	var f := FileAccess.open(path, FileAccess.READ)
+	var f := FileAccess.open(_disk_path(path), FileAccess.READ)
 	if f == null:
 		return -1
 	var size := f.get_length()
@@ -652,13 +1214,11 @@ static func _file_size(path: String) -> int:
 
 # ---------------------------------------------------------------- logging
 
-static func _write_log(
+static func build_log_text(
 	orphans: Array, roots: Array, dynamic_dirs: Array, graph: Dictionary,
-	unresolved_refs: Array, reachable_count: int, total_files: int, truncated: Array
-) -> void:
-	if not DirAccess.dir_exists_absolute(LOG_DIR):
-		DirAccess.make_dir_recursive_absolute(LOG_DIR)
-
+	unresolved_refs: Array, reachable_count: int, total_files: int, truncated: Array,
+	godot_pass := true, godot_files := 0
+) -> String:
 	var lines: PackedStringArray = []
 	lines.append("================================================================")
 	lines.append("Orphan scan (reachability): %s" % Time.get_datetime_string_from_system())
@@ -672,7 +1232,11 @@ static func _write_log(
 	lines.append("ORPHANS -- never reached from any entry point (%d):" % orphans.size())
 	for o in orphans:
 		var od: Dictionary = o
-		lines.append("  %s  (%d bytes)" % [od["path"], od["size"]])
+		var note := ""
+		if od.has("duplicated_in"):
+			note = "   <-- content is duplicated inline inside %s" % String(od["duplicated_in"])
+		lines.append("  %s  (%d bytes)%s" % [od["path"], od["size"], note])
+
 	if not dynamic_dirs.is_empty():
 		lines.append("")
 		lines.append("DIRECTORIES REFERENCED AS PATHS (%d) -- contents treated as live," % dynamic_dirs.size())
@@ -714,11 +1278,26 @@ static func _write_log(
 	lines.append("================================================================")
 	lines.append("")
 
+	return "\n".join(lines) + "\n"
+
+
+## Writes previously-built log text to disk. Separate from building it so a
+## scan never writes a file nobody asked for -- reports are only saved when
+## you press Save.
+static func write_log_to(path: String, text: String) -> String:
+	var folder := path.get_base_dir()
+	if folder != "" and not DirAccess.dir_exists_absolute(folder):
+		if DirAccess.make_dir_recursive_absolute(folder) != OK:
+			return "Could not create %s" % folder
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		return "Could not write %s" % path
+	f.store_string(text)
+	f.close()
+	return ""
+
+
+## Default destination for a Save (as opposed to Save As).
+static func default_log_path() -> String:
 	var stamp := Time.get_datetime_string_from_system().replace(":", "-")
-	var log_path := "%s/scan_%s.txt" % [LOG_DIR, stamp]
-	var wf := FileAccess.open(log_path, FileAccess.WRITE)
-	if wf == null:
-		push_error("Orphan Finder: could not write log %s" % log_path)
-		return
-	wf.store_string("\n".join(lines) + "\n")
-	wf.close()
+	return "%s/scan_%s.txt" % [log_dir, stamp]
