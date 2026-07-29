@@ -72,7 +72,7 @@ const LABEL_VIEW_DISTANCE := 90.0
 
 # --- label legibility --------------------------------------------------------
 const LABEL_FONT_SIZE := 48
-const LABEL_PIXEL_SIZE := 0.006
+const LABEL_PIXEL_SIZE := 0.010
 ## Extra clearance above the node so the text isn't sitting on the icon.
 const LABEL_LIFT := 0.55
 
@@ -341,7 +341,9 @@ var _info_label: RichTextLabel
 var _help_label: Label
 var _top_bar: VBoxContainer
 var _toolbar_buttons := {}
-var _toolbar_help: MenuButton
+var _toolbar_help: Button
+var _toolbar_help_popup: PopupPanel
+var _toolbar_help_list: VBoxContainer
 var _left_panel: PanelContainer
 var _right_panel: PanelContainer
 var _left_show_button: Button
@@ -705,6 +707,7 @@ func _load_icons() -> void:
 	_warning_icon = _load_exported_icon(TypeIcons.special_icon_path("node_warning"))
 	_host_badge_icon = _load_exported_icon(TypeIcons.special_icon_path("host_badge"))
 	_apply_toolbar_icons()
+	_sync_toolbar_buttons()
 
 
 func _compute_in_degrees() -> void:
@@ -3743,61 +3746,171 @@ func _set_toolbar_pressed(id: String, pressed: bool) -> void:
 		(_toolbar_buttons[id] as Button).set_pressed_no_signal(pressed)
 
 
+func _set_toolbar_state_icon(id: String, state: String) -> void:
+	if not _toolbar_buttons.has(id):
+		return
+	var texture := _toolbar_icon(id + "_" + state)
+	if texture != null:
+		(_toolbar_buttons[id] as Button).icon = texture
+
+
 func _sync_toolbar_buttons() -> void:
-	_set_toolbar_pressed("layout", _layout_mode == LayoutMode.FOLDER)
+	var folder_layout := _layout_mode == LayoutMode.FOLDER
+	_set_toolbar_pressed("layout", folder_layout)
+	_set_toolbar_state_icon("layout", "folder" if folder_layout else "dependency")
 	_set_toolbar_pressed("sidecars", _show_sidecars)
+	_set_toolbar_state_icon("sidecars", "on" if _show_sidecars else "off")
 	_set_toolbar_pressed("heat", _heat_mode)
+	_set_toolbar_state_icon("heat", "on" if _heat_mode else "off")
 	_set_toolbar_pressed("pair", _pair_scripts)
+	_set_toolbar_state_icon("pair", "on" if _pair_scripts else "off")
 	_set_toolbar_pressed("isolate", _isolate_mode)
+	_set_toolbar_state_icon("isolate", "on" if _isolate_mode else "off")
 	_set_toolbar_pressed("inline", _show_embed_links)
+	_set_toolbar_state_icon("inline", "on" if _show_embed_links else "off")
 	_set_toolbar_pressed("gather", _gather_enabled)
+	_set_toolbar_state_icon("gather", "on" if _gather_enabled else "off")
 	_set_toolbar_pressed("weight", _weight_layout)
+	_set_toolbar_state_icon("weight", "on" if _weight_layout else "off")
 	_set_toolbar_pressed("pull", _relax_layout)
+	_set_toolbar_state_icon("pull", "on" if _relax_layout else "off")
 	_set_toolbar_pressed("group", _group_affinity)
+	_set_toolbar_state_icon("group", "on" if _group_affinity else "off")
 	_set_toolbar_pressed("labels", _min_label_global)
+	_set_toolbar_state_icon("labels", "on" if _min_label_global else "off")
 	_set_toolbar_pressed("label_cull", _label_distance_culling)
-	_set_toolbar_pressed("files", _left_panel != null and _left_panel.visible)
-	_set_toolbar_pressed("info", _right_panel != null and _right_panel.visible)
+	_set_toolbar_state_icon("label_cull", "on" if _label_distance_culling else "off")
+	var files_visible := _left_panel != null and _left_panel.visible
+	_set_toolbar_pressed("files", files_visible)
+	_set_toolbar_state_icon("files", "on" if files_visible else "off")
+	var info_visible := _right_panel != null and _right_panel.visible
+	_set_toolbar_pressed("info", info_visible)
+	_set_toolbar_state_icon("info", "on" if info_visible else "off")
 	if _toolbar_buttons.has("connections"):
+		var connection_state := "flat"
+		if _line_style == LineStyle.STRAND_TUBE:
+			connection_state = "cable"
+		elif _line_style == LineStyle.SOLID_TUBE:
+			connection_state = "tube"
+		_set_toolbar_state_icon("connections", connection_state)
 		(_toolbar_buttons["connections"] as Button).tooltip_text = "Cycle connection rendering (T). Current: " + _line_style_name()
 
 
-func _add_help_text(popup: PopupMenu, text: String) -> void:
-	popup.add_item(text)
-	popup.set_item_disabled(popup.item_count - 1, true)
+func _add_toolbar_help_heading(text: String) -> void:
+	if not _toolbar_help_list.get_children().is_empty():
+		_toolbar_help_list.add_child(HSeparator.new())
+	var heading := Label.new()
+	heading.text = text
+	heading.add_theme_font_size_override("font_size", 18)
+	_toolbar_help_list.add_child(heading)
+
+
+func _add_toolbar_help_entry(id: String, shortcut: String, description: String) -> void:
+	var source: Button = _toolbar_buttons[id]
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	_toolbar_help_list.add_child(row)
+
+	# A duplicate keeps the live icon, pressed state, flat/toggle style,
+	# expansion settings and theme. Ignoring mouse input makes it a visual
+	# sample without tinting it like a disabled control.
+	var sample := source.duplicate() as Button
+	sample.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	sample.focus_mode = Control.FOCUS_NONE
+	sample.set_pressed_no_signal(source.button_pressed)
+	sample.custom_minimum_size = Vector2(maxf(source.size.x, 32.0), maxf(source.size.y, 24.0))
+	row.add_child(sample)
+
+	var copy := Label.new()
+	copy.text = ("%s — " % shortcut if shortcut != "" else "") + description
+	copy.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	copy.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	copy.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(copy)
+
+
+func _equalize_toolbar_help_samples() -> void:
+	var samples: Array[Button] = []
+	var tallest := 0.0
+	for child in _toolbar_help_list.get_children():
+		if child is HBoxContainer and child.get_child_count() >= 2 and child.get_child(0) is Button:
+			var sample := child.get_child(0) as Button
+			samples.append(sample)
+			tallest = maxf(tallest, child.size.y)
+	for sample in samples:
+		sample.custom_minimum_size.y = tallest
+
+
+func _refresh_toolbar_help() -> void:
+	for child in _toolbar_help_list.get_children():
+		_toolbar_help_list.remove_child(child)
+		child.queue_free()
+
+	_add_toolbar_help_heading("View and layout")
+	_add_toolbar_help_entry("layout", "G", "Switch between dependency depth and real folder structure.")
+	_add_toolbar_help_entry("sidecars", "I", "Include or hide .import and .uid files.")
+	_add_toolbar_help_entry("heat", "H", "Colour nodes by cycles and coupling instead of file type.")
+	_add_toolbar_help_entry("pair", "P", "Keep scripts near the scenes that own them.")
+	_add_toolbar_help_entry("connections", "T", "Cycle flat strands, cable strands, and weighted tubes.")
+	_add_toolbar_help_entry("weight", "B", "Place heavily connected files first.")
+	_add_toolbar_help_entry("pull", "Y", "Pull weakly linked files toward the files that reference them.")
+	_add_toolbar_help_entry("group", "J", "Group files that share a naming convention.")
+
+	_add_toolbar_help_heading("Focus and readability")
+	_add_toolbar_help_entry("isolate", "O", "Show only the selection and its direct neighbours.")
+	_add_toolbar_help_entry("inline", "U", "Show links to resources whose code is copied into another file.")
+	_add_toolbar_help_entry("gather", "R", "Temporarily gather direct relations around the selection.")
+	_add_toolbar_help_entry("labels", "M", "Enforce a minimum screen size for every label.")
+	_add_toolbar_help_entry("label_cull", "L", "Hide distant labels except the selected neighbourhood.")
+	_add_toolbar_help_entry("clear", "C", "Remove path-trace or change-impact overlays.")
+
+	_add_toolbar_help_heading("Files and panels")
+	_add_toolbar_help_entry("filter", "K", "Remove file types from analysis and recompute the layout.")
+	_add_toolbar_help_entry("visibility", "", "Hide file types visually while keeping the full computed graph.")
+	_add_toolbar_help_entry("files", "F1", "Show or hide the Project Files panel.")
+	_add_toolbar_help_entry("info", "F2", "Show or hide the Selection panel.")
+	_add_toolbar_help_entry("panels", "F3", "Scan another Godot project.")
+	_add_toolbar_help_entry("home", "F / Home", "Return the camera to its starting view.")
+
+	_add_toolbar_help_heading("Mouse and camera")
+	var camera_help := Label.new()
+	camera_help.text = "Click captures or selects; click again deselects; right-click opens node actions.\nWASD + mouse flies, Q/E moves down/up, Shift boosts, the wheel changes speed, and Escape releases the mouse."
+	camera_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_toolbar_help_list.add_child(camera_help)
+
+
+func _open_toolbar_help() -> void:
+	_refresh_toolbar_help()
+	var viewport_size := get_viewport().get_visible_rect().size
+	var popup_size := Vector2(minf(780.0, viewport_size.x * 0.82), minf(720.0, viewport_size.y * 0.82))
+	_toolbar_help_popup.popup_centered_clamped(popup_size)
+	# Text wrapping is only known after the popup receives its final width.
+	# Measure then so every icon sample adopts the tallest description row.
+	await get_tree().process_frame
+	_equalize_toolbar_help_samples()
 
 
 func _build_toolbar_help() -> void:
-	var popup := _toolbar_help.get_popup()
-	_add_help_text(popup, "VIEW & LAYOUT")
-	_add_help_text(popup, "Tree (G) — switch between dependency depth and real folder structure")
-	_add_help_text(popup, "Sidecars (I) — include or hide .import and .uid files")
-	_add_help_text(popup, "Heat (H) — colour nodes by cycles and coupling instead of file type")
-	_add_help_text(popup, "Pair (P) — keep scripts near the scenes that own them")
-	_add_help_text(popup, "Lines (T) — cycle flat strands, cable strands, and weighted tubes")
-	_add_help_text(popup, "Weight (B) — place heavily connected files first")
-	_add_help_text(popup, "Pull (Y) — pull weakly linked files toward the files that reference them")
-	_add_help_text(popup, "Groups (J) — group files that share a naming convention")
-	popup.add_separator()
-	_add_help_text(popup, "FOCUS & READABILITY")
-	_add_help_text(popup, "Isolate (O) — show only the selection and its direct neighbours")
-	_add_help_text(popup, "Inline (U) — show links to resources whose code is copied into another file")
-	_add_help_text(popup, "Gather (R) — temporarily gather direct relations around the selection")
-	_add_help_text(popup, "Labels (M) — enforce a minimum screen size for every label")
-	_add_help_text(popup, "Cull (L) — hide distant labels except the selected neighbourhood")
-	_add_help_text(popup, "Clear (C) — remove path-trace or change-impact analysis overlays")
-	popup.add_separator()
-	_add_help_text(popup, "FILES & PANELS")
-	_add_help_text(popup, "Filter (K) — remove file types from analysis and recompute the layout")
-	_add_help_text(popup, "Hide — hide file types visually while keeping the full computed graph")
-	_add_help_text(popup, "Files (F1) / Info (F2) — show or hide the side panels")
-	_add_help_text(popup, "Open (F3) — scan another Godot project")
-	_add_help_text(popup, "Home (F or Home) — return the camera to its starting view")
-	popup.add_separator()
-	_add_help_text(popup, "MOUSE & CAMERA")
-	_add_help_text(popup, "Click captures/selects; click again deselects; right-click opens node actions")
-	_add_help_text(popup, "WASD + mouse flies; Q/E moves down/up; Shift boosts; wheel changes speed")
-	_add_help_text(popup, "Escape releases the mouse")
+	_toolbar_help_popup = PopupPanel.new()
+	add_child(_toolbar_help_popup)
+
+	var margin := MarginContainer.new()
+	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", 16)
+	margin.add_theme_constant_override("margin_top", 12)
+	margin.add_theme_constant_override("margin_right", 16)
+	margin.add_theme_constant_override("margin_bottom", 12)
+	_toolbar_help_popup.add_child(margin)
+
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	margin.add_child(scroll)
+
+	_toolbar_help_list = VBoxContainer.new()
+	_toolbar_help_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_toolbar_help_list.add_theme_constant_override("separation", 8)
+	scroll.add_child(_toolbar_help_list)
+	_toolbar_help.pressed.connect(_open_toolbar_help)
 
 
 func _build_toolbar() -> void:
@@ -3838,7 +3951,7 @@ func _build_toolbar() -> void:
 		button.pressed.connect(binding[2] as Callable)
 		_toolbar_buttons[id] = button
 
-	_toolbar_help = get_node(row_path + "Help") as MenuButton
+	_toolbar_help = get_node(row_path + "Help") as Button
 	_toolbar_help.tooltip_text = "What every toolbar button and shortcut does"
 	_toolbar_help.expand_icon = true
 	_toolbar_help.flat = true
@@ -3846,8 +3959,8 @@ func _build_toolbar() -> void:
 	if not toolbar_show_labels:
 		_toolbar_help.text = ""
 	_build_toolbar_help()
-	_sync_toolbar_buttons()
 	_apply_toolbar_icons()
+	_sync_toolbar_buttons()
 
 
 func _build_ui() -> void:

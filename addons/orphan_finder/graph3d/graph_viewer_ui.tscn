@@ -208,7 +208,7 @@ size_flags_horizontal = 3
 focus_mode = 0
 text = "Open"
 
-[node name="Help" type="MenuButton" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=921148662]
+[node name="Help" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=921148662]
 custom_minimum_size = Vector2(24, 0)
 layout_mode = 2
 size_flags_horizontal = 3
