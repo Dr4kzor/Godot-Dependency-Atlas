@@ -69,7 +69,12 @@ requested.
 
 Deletion is deliberately gated. Enabling it presents the static-analysis
 limitations first, and accepted files are moved to the system trash rather
-than permanently erased.
+than permanently erased. While deletion remains armed, pulsing triangular
+warnings and horizontally rotating red lighthouse beams appear in both upper
+corners of the active dock or 3D viewing area. They disappear when a new scan
+revokes deletion permission. Their reusable scene is
+`deletion_warning_overlay.tscn`; `light_rotation_speed` and `warning_scale` are
+exposed for visual tuning.
 
 ## Using the 3D atlas
 

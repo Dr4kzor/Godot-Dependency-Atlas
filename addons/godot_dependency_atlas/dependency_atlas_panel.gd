@@ -9,6 +9,7 @@ const DeletionManager = preload("res://addons/godot_dependency_atlas/graph3d/del
 const PermissionDialog = preload("res://addons/godot_dependency_atlas/graph3d/permission_dialog.gd")
 const TypeIcons = preload("res://addons/godot_dependency_atlas/graph3d/type_icons.gd")
 const GraphMetrics = preload("res://addons/godot_dependency_atlas/graph3d/graph_metrics.gd")
+const DeletionWarningScene = preload("res://addons/godot_dependency_atlas/deletion_warning_overlay.tscn")
 
 ## Minimum height requested when this panel is first docked.
 const PANEL_MIN_HEIGHT := 260
@@ -28,6 +29,7 @@ var _last_log_text := ""
 var _save_dialog: EditorFileDialog
 var _save_log_button: Button
 var _save_as_button: Button
+var _deletion_warning: DeletionWarningOverlay
 
 
 func _init() -> void:
@@ -106,6 +108,9 @@ func _init() -> void:
 	_tree.item_activated.connect(_on_item_activated)
 	add_child(_tree)
 
+	_deletion_warning = DeletionWarningScene.instantiate()
+	_tree.add_child(_deletion_warning)
+
 
 ## Reports are only written when asked for. Auto-saving every scan filled the
 ## logs folder with files nobody had read.
@@ -135,6 +140,8 @@ func _on_delete_button() -> void:
 func _refresh_delete_button() -> void:
 	if _delete_button == null:
 		return
+	if _deletion_warning != null:
+		_deletion_warning.set_warning_enabled(_deletion.is_granted())
 	if _deletion.is_granted():
 		_delete_button.text = "Move to trash  (%d done)" % _deletion.deleted_count()
 		_delete_button.tooltip_text = "Moves the selected orphan to the system trash"

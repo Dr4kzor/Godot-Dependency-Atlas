@@ -41,6 +41,7 @@ const PermissionDialog = preload("res://addons/godot_dependency_atlas/graph3d/pe
 const LanguageAnalyzer = preload("res://addons/godot_dependency_atlas/language_analyzer.gd")
 const MoveRefactorDialog = preload("res://addons/godot_dependency_atlas/refactor/move_refactor_dialog.gd")
 const RefactorEngine = preload("res://addons/godot_dependency_atlas/refactor/refactor_engine.gd")
+const DeletionWarningScene = preload("res://addons/godot_dependency_atlas/deletion_warning_overlay.tscn")
 
 enum LayoutMode { DEPENDENCY, FOLDER }
 ## Optional overlays, both off by default and both driven from a selection.
@@ -352,6 +353,7 @@ var _deletion = DeletionManager.new()
 var _permission_dialog: ConfirmationDialog
 var _confirm_delete_dialog: ConfirmationDialog
 var _move_refactor_dialog
+var _deletion_warning: DeletionWarningOverlay
 var _pending_delete := ""
 var _diagnostics_dialog: AcceptDialog
 var _diagnostics_input: LineEdit
@@ -505,6 +507,8 @@ var _visuals_root: Node3D
 func _ready() -> void:
 	_build_environment()
 	_build_ui()
+	_deletion_warning = DeletionWarningScene.instantiate()
+	_viewport_spacer.add_child(_deletion_warning)
 	_build_camera()
 	_load_settings()
 	_load_icons()
@@ -536,6 +540,7 @@ func _run_scan() -> void:
 	# The previous answer was given about a list that no longer exists.
 	_deletion.configure(_scan_root)
 	_deletion.revoke()
+	_deletion_warning.set_warning_enabled(false)
 	OrphanScanner.scan_root = _scan_root
 	OrphanScanner.log_dir = OFConfig.log_dir(_scan_root)
 	var layout_problem := OFConfig.ensure_layout(_scan_root)
@@ -4384,6 +4389,7 @@ func _request_delete_permission() -> void:
 		_permission_dialog = PermissionDialog.new()
 		_permission_dialog.permission_granted.connect(func():
 			_deletion.grant()
+			_deletion_warning.set_warning_enabled(true)
 			_update_status()
 			_show_toast("Deletion enabled — files move to the trash, and reset on the next scan")
 		)

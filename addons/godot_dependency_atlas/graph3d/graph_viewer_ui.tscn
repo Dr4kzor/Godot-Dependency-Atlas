@@ -287,6 +287,7 @@ grow_horizontal = 2
 mouse_filter = 2
 
 [node name="Status" type="Label" parent="Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/ViewportSpacer/StatusOverlay" unique_id=12679973]
+visible = false
 layout_mode = 2
 autowrap_mode = 2
 
