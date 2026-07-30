@@ -407,6 +407,7 @@ var _tree_items := {}
 var _root_split: HSplitContainer
 var _inner_split: HSplitContainer
 var _viewport_spacer: Control
+var _crosshair: Control
 
 var _graph := {}
 var _edge_kinds := {}
@@ -3832,6 +3833,7 @@ func _build_ui() -> void:
 	_left_panel = $UI/Layout/MainSplit/ContentRoot/RootSplit/LeftPanel
 	_inner_split = $UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit
 	_viewport_spacer = $UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/ViewportSpacer
+	_crosshair = $UI/Layout/MainSplit/ContentRoot/Crosshair
 	_right_panel = $UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/RightPanel
 	_top_bar = $UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/ViewportSpacer/StatusOverlay
 	_status_label = $UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/ViewportSpacer/StatusOverlay/Status
@@ -3852,12 +3854,12 @@ func _build_ui() -> void:
 	_outline_overlay(_help_label)
 	_outline_overlay(_progress_overlay)
 	_outline_overlay(_toast_label)
-	_outline_overlay($UI/Layout/MainSplit/ContentRoot/Crosshair)
+	_outline_overlay(_crosshair)
 	_status_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
 	_help_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
 	_progress_overlay.add_theme_font_size_override("font_size", 20)
 	_toast_label.add_theme_font_size_override("font_size", 18)
-	$UI/Layout/MainSplit/ContentRoot/Crosshair.add_theme_color_override("font_color", Color(1, 1, 1, 0.7))
+	_crosshair.add_theme_color_override("font_color", Color(1, 1, 1, 0.7))
 
 	$UI/Layout/MainSplit/ContentRoot/RootSplit/LeftPanel/LeftBox/Header/Visibility.pressed.connect(_open_visibility_window)
 	$UI/Layout/MainSplit/ContentRoot/RootSplit/LeftPanel/LeftBox/Header/Filters.pressed.connect(_open_filter_window)
@@ -5757,7 +5759,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		var right_click := event as InputEventMouseButton
 		var point: Vector2 = right_click.position
 		if _camera.is_captured():
-			point = get_viewport().get_visible_rect().size * 0.5
+			point = _crosshair_screen_point()
 		_open_node_menu(point)
 		return
 
@@ -5770,7 +5772,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if left_click.pressed:
 			_press_consumed = false
 			if _camera.is_captured():
-				_press_position = get_viewport().get_visible_rect().size * 0.5
+				_press_position = _crosshair_screen_point()
 			else:
 				_press_position = left_click.position
 
@@ -5818,18 +5820,18 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _pick_node() -> String:
-	return _pick_node_at(get_viewport().get_visible_rect().size * 0.5)
+	return _pick_node_at(_crosshair_screen_point())
 
 
-## Casts a ray through the given screen point -- unbounded, so distance is
-## never the limiting factor -- and returns the node whose sphere it passes
-## closest to the centre of.
-##
-## The miss distance is divided by that node's own tolerance before comparing,
-## so "how well centred is this" is measured on the same scale for near and
-## far nodes alike. Without that normalisation a large nearby node would win
-## every contest simply by having a bigger sphere, even when the crosshair is
-## plainly on something else.
+func _crosshair_screen_point() -> Vector2:
+	if _crosshair == null:
+		return get_viewport().get_visible_rect().size * 0.5
+	return _crosshair.get_global_rect().get_center()
+
+
+## Casts a ray through the actual UI crosshair point -- not the window centre,
+## because the resizable toolbar shifts the content area's centre vertically.
+## Among overlapping hit volumes, the nearest visible intersection wins.
 func _pick_node_at(screen_point: Vector2) -> String:
 	var origin := _camera.project_ray_origin(screen_point)
 	var direction := _camera.project_ray_normal(screen_point)
