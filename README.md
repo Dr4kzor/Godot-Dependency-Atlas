@@ -1,3 +1,15 @@
+# This started as a manuall coded project, and it has been Iterated with AI both Anthropic Claude and OpenAI Codex
+## It is really usefull to see your project files interconnections, viewing the code structure in 3D is easier than reading a large text file and checking what other files does it use.
+## Before you delete anything on your project please make a commit and double check!
+
+
+If you find bugs you can report them, Ideally with a project added that is able to show this bug happening this is crucial to make a in dept analisis so that we can bug test and add tests so that it never happens again!
+
+
+It is almost 100% reliable for gdscript with lower confidence for other languages!
+
+
+
 # Godot Dependency Atlas
 
 Godot Dependency Atlas maps how a Godot project’s scenes, scripts, resources,
