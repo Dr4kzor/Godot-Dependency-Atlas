@@ -260,6 +260,7 @@ const PROXY_KINDS := ["tres", "res", "gdshader", "gdshaderinc"]
 ## Prefix marking a proxy pseudo-path, so it can be positioned and picked
 ## without colliding with the real file's entry.
 const PROXY_PREFIX := "::proxy::"
+const COMMENT_PROXY_PREFIX := "::comment_proxy::"
 const HIDDEN_GROUP_PREFIX := "::hidden_group::"
 const PROXY_DROP := 1.2            # layers below the host it is embedded in
 const PROXY_SIZE := 0.5
@@ -270,6 +271,7 @@ const DASH_GAP := 0.7
 ## embedded inside a live file. Usually the result of Make Unique, which
 ## inlines a resource and silently orphans the original.
 const COLOR_EMBED_LINK := Color(0.72, 0.42, 1.00)     # purple
+const COLOR_COMMENT_LINK := Color(0.28, 0.88, 0.92)   # dormant/comment cyan
 ## Dependencies between orphans. Real relationships, but inside dead code, so
 ## they're muted to avoid reading as live wiring.
 const COLOR_ORPHAN_EDGE := Color(0.66, 0.40, 0.38, 0.5)
@@ -448,6 +450,9 @@ var _orphan_set := {}
 ## scanner found one. Explains an otherwise baffling orphan result.
 var _orphan_notes := {}
 var _proxy_of := {}      # proxy pseudo-path -> the real orphan it stands for
+var _commented_dependencies: Array = []
+var _comment_proxy_data := {} # comment proxy -> {source, target, evidence}
+var _comment_targets := {}    # orphan -> evidence entries
 var _orphan_graph := {}   # references between orphans, for the dead-cluster forest
 var _reverse_graph := {}  # target -> everything referencing it
 var _analysis_mode: AnalysisMode = AnalysisMode.NONE
@@ -523,6 +528,8 @@ var _icon_textures := {}
 var _sprites := {}
 var _labels := {}
 var _sphere_paths: Array = []
+var _evidence_card: Sprite3D
+var _evidence_card_viewport: SubViewport
 
 var _mesh_instance: MultiMeshInstance3D
 var _edge_mesh_instance: MeshInstance3D
@@ -550,6 +557,9 @@ func _run_scan() -> void:
 	_orphan_set.clear()
 	_orphan_notes.clear()
 	_proxy_of.clear()
+	_commented_dependencies.clear()
+	_comment_proxy_data.clear()
+	_comment_targets.clear()
 	_orphan_graph.clear()
 	_parent_of.clear()
 	_class_of.clear()
@@ -596,6 +606,7 @@ func _run_scan() -> void:
 	_godot_pass_used = bool(result.get("godot_pass_used", false))
 	_godot_dependency_files = int(result.get("godot_dependency_files", 0))
 	_orphan_graph = result.get("orphan_graph", {})
+	_commented_dependencies = result.get("commented_dependencies", [])
 	_graph = result.get("graph", {})
 	_edge_kinds = result.get("edge_kinds", {})
 	_dep_depth = result.get("depth", {})
@@ -606,6 +617,7 @@ func _run_scan() -> void:
 		if od.has("duplicated_in"):
 			_orphan_notes[String(od["path"])] = String(od["duplicated_in"])
 	_build_embed_hosts()
+	_build_comment_evidence_index()
 
 	_set_progress("Indexing results…")
 	await _breathe()
@@ -1146,6 +1158,9 @@ func _layout_grid(tree: Dictionary) -> void:
 	# Last, so it can pull stray files toward their references while every
 	# grid built above stays intact.
 	_relax_toward_neighbours()
+	# Comment ghosts are annotations of their source, not independent layout
+	# nodes. Re-anchor after every pass that may have moved the source.
+	_anchor_comment_proxies()
 
 
 ## Nudges a script owned by exactly one scene to sit right beside it.
@@ -1193,6 +1208,18 @@ func _build_embed_hosts() -> void:
 		_embed_hosts[host].append(orphan)
 
 
+func _build_comment_evidence_index() -> void:
+	_comment_targets.clear()
+	for evidence_any in _commented_dependencies:
+		var evidence: Dictionary = evidence_any
+		var target := String(evidence.get("target", ""))
+		if target == "":
+			continue
+		if not _comment_targets.has(target):
+			_comment_targets[target] = []
+		(_comment_targets[target] as Array).append(evidence)
+
+
 ## Outgoing references for any file, whether it was reached or not. Orphan
 ## edges live in their own map because the traversal never visited them.
 func _refs_of(path: String) -> Array:
@@ -1212,8 +1239,16 @@ func _has_proxy(path: String) -> bool:
 	return _orphan_notes.has(path) and path.get_extension().to_lower() in PROXY_KINDS
 
 
+func _has_comment_evidence(path: String) -> bool:
+	return _comment_targets.has(path)
+
+
 func _proxy_path_for(path: String) -> String:
 	return PROXY_PREFIX + path
+
+
+func _comment_proxy_path_for(source: String, target: String) -> String:
+	return COMMENT_PROXY_PREFIX + source + "::to::" + target
 
 
 ## The real file a node stands for: itself, unless it is a proxy.
@@ -1250,11 +1285,14 @@ func _orphan_groups() -> Dictionary:
 	var plain: Array = []
 	var duplicated: Array = []
 	var proxied: Array = []
+	var commented: Array = []
 	for key in _orphan_set.keys():
 		var op: String = key
 		if _is_hidden(op) or _is_configured_view_hidden(op):
 			continue
-		if _has_proxy(op):
+		if _has_comment_evidence(op):
+			commented.append(op)
+		elif _has_proxy(op):
 			proxied.append(op)
 		elif _orphan_notes.has(op):
 			duplicated.append(op)
@@ -1270,7 +1308,11 @@ func _orphan_groups() -> Dictionary:
 	plain.sort_custom(sorter)
 	duplicated.sort_custom(sorter)
 	proxied.sort_custom(sorter)
-	return {"plain": plain, "duplicated": duplicated, "proxied": proxied}
+	commented.sort_custom(sorter)
+	return {
+		"plain": plain, "duplicated": duplicated, "proxied": proxied,
+		"commented": commented,
+	}
 
 
 ## In DEPENDENCY mode the plain orphans are collapsed behind a red cube by
@@ -2107,7 +2149,11 @@ func _place_orphan_grid() -> void:
 	var plain: Array = groups["plain"]
 	var duplicated: Array = groups["duplicated"]
 	var proxied: Array = groups["proxied"]
-	if plain.is_empty() and duplicated.is_empty() and proxied.is_empty():
+	var commented: Array = groups["commented"]
+	if (
+		plain.is_empty() and duplicated.is_empty()
+		and proxied.is_empty() and commented.is_empty()
+	):
 		return
 
 	if _layout_mode == LayoutMode.FOLDER:
@@ -2142,6 +2188,9 @@ func _place_orphan_grid() -> void:
 	if not proxied.is_empty():
 		_layout_orphan_forest(proxied, base_x, start_z, proxied_y)
 		_centre_orphans_on(proxied, anchor)
+	if not commented.is_empty():
+		_layout_orphan_forest(commented, base_x, start_z, proxied_y)
+		_centre_orphans_on(commented, anchor)
 	if not duplicated.is_empty():
 		_layout_orphan_forest(duplicated, base_x, start_z, duplicated_y)
 		_centre_orphans_on(duplicated, anchor)
@@ -2166,6 +2215,7 @@ func _place_orphan_grid() -> void:
 		_sizes[ORPHAN_HUB] = ORPHAN_HUB_SIZE
 
 	_place_proxies(proxied)
+	_place_comment_proxies(commented)
 
 
 ## Draws a stand-in for each proxied orphan directly below the file that
@@ -2206,6 +2256,90 @@ func _place_proxies(proxied: Array) -> void:
 				origin.z
 			))
 			_sizes[proxy] = PROXY_SIZE
+
+
+## One dormant ghost per source/target pair. Several commented lines in the
+## same source share a card instead of filling the world with duplicate nodes.
+func _place_comment_proxies(commented: Array) -> void:
+	for old_proxy_any in _comment_proxy_data.keys():
+		var old_proxy := String(old_proxy_any)
+		_positions.erase(old_proxy)
+		_sizes.erase(old_proxy)
+		_proxy_of.erase(old_proxy)
+	_comment_proxy_data.clear()
+
+	var grouped := {}
+	for target_any in commented:
+		var target := String(target_any)
+		for evidence_any in _comment_targets.get(target, []):
+			var evidence: Dictionary = evidence_any
+			var source := String(evidence.get("source", ""))
+			if source == "" or not _positions.has(source):
+				continue
+			var pair := source + "\n" + target
+			if not grouped.has(pair):
+				grouped[pair] = {
+					"source": source, "target": target, "evidence": [],
+				}
+			(grouped[pair].evidence as Array).append(evidence)
+
+	var by_source := {}
+	for data_any in grouped.values():
+		var data: Dictionary = data_any
+		var source := String(data.source)
+		if not by_source.has(source):
+			by_source[source] = []
+		(by_source[source] as Array).append(data)
+
+	for source_any in by_source.keys():
+		var source := String(source_any)
+		var pairs: Array = by_source[source]
+		pairs.sort_custom(func(a, b): return String(a.target) < String(b.target))
+		var origin: Vector3 = _positions[source]
+		for pair_index in pairs.size():
+			var data: Dictionary = pairs[pair_index]
+			var target := String(data.target)
+			var proxy := _comment_proxy_path_for(source, target)
+			_comment_proxy_data[proxy] = data
+			_proxy_of[proxy] = target
+			# Deliberately do not pass through collision repair. Like an
+			# embedded-code ghost, this node is a local annotation and must
+			# remain directly below the source that contains the comment.
+			_positions[proxy] = Vector3(
+				origin.x,
+				origin.y - vertical_layer_separation * (
+					PROXY_DROP + float(pair_index) * 0.45
+				),
+				origin.z
+			)
+			_sizes[proxy] = PROXY_SIZE
+
+
+func _anchor_comment_proxies() -> void:
+	var by_source := {}
+	for proxy_any in _comment_proxy_data.keys():
+		var proxy := String(proxy_any)
+		var data: Dictionary = _comment_proxy_data[proxy]
+		var source := String(data.get("source", ""))
+		if source == "" or not _positions.has(source):
+			continue
+		if not by_source.has(source):
+			by_source[source] = []
+		(by_source[source] as Array).append(proxy)
+	for source_any in by_source.keys():
+		var source := String(source_any)
+		var proxies: Array = by_source[source]
+		proxies.sort()
+		var source_position: Vector3 = _positions[source]
+		for proxy_index in proxies.size():
+			var proxy := String(proxies[proxy_index])
+			_positions[proxy] = Vector3(
+				source_position.x,
+				source_position.y - vertical_layer_separation * (
+					PROXY_DROP + float(proxy_index) * 0.45
+				),
+				source_position.z
+			)
 
 
 ## Lays a group of orphans out as a forest of small trees rather than a flat
@@ -2415,6 +2549,8 @@ func _color_for(path: String) -> Color:
 		return _color_for(String(_hidden_member_of[path]))
 	if _hidden_group_members.has(path):
 		return TypeIcons.color_of(int(_hidden_group_kind.get(path, TypeIcons.Kind.OTHER)))
+	if path.begins_with(COMMENT_PROXY_PREFIX) or _has_comment_evidence(path):
+		return COLOR_COMMENT_LINK
 	# A proxy is a stand-in, so it takes its whole appearance -- colour, icon
 	# and label -- from the file it represents.
 	if _proxy_of.has(path):
@@ -2727,6 +2863,8 @@ func _register_hidden_reference_group(owner: String, hidden_path: String) -> voi
 
 
 func _clear_visuals() -> void:
+	_evidence_card = null
+	_evidence_card_viewport = null
 	if _mesh_instance != null:
 		_mesh_instance.queue_free()
 		_mesh_instance = null
@@ -2863,6 +3001,8 @@ func _build_nodes() -> void:
 				aggregate_members.size(),
 				"collapse" if aggregate_expanded else "expand",
 			]
+		elif _comment_proxy_data.has(path):
+			label.text = "commented use → " + _resolve_proxy(path).get_file()
 		else:
 			# Proxies carry the same name as the file they stand for.
 			label.text = _resolve_proxy(path).get_file() + ("/" if _dir_nodes.has(path) else "")
@@ -3181,6 +3321,7 @@ func _rebuild_edges() -> void:
 	if _analysis_mode != AnalysisMode.PATHS:
 		_draw_folder_links(im)
 		_draw_embed_links(im)
+		_draw_commented_dependency_links(im)
 
 	# Expanded hidden members are deliberately not real dependency endpoints:
 	# the dependency terminates at the aggregate dummy. These short branch
@@ -3314,9 +3455,13 @@ func _add_deduped_edge(
 func _is_deletable(path: String) -> bool:
 	if path == "" or path == ORPHAN_HUB or path == CLUSTER_HUB:
 		return false
-	if path.begins_with(PROXY_PREFIX) or _dir_nodes.has(path):
+	if (
+		path.begins_with(PROXY_PREFIX)
+		or path.begins_with(COMMENT_PROXY_PREFIX)
+		or _dir_nodes.has(path)
+	):
 		return false
-	if _orphan_notes.has(path):
+	if _orphan_notes.has(path) or _has_comment_evidence(path):
 		return false
 	return _orphan_set.has(path) and not _deletion.was_deleted(path)
 
@@ -3643,6 +3788,38 @@ func _draw_embed_links(im: ImmediateMesh) -> void:
 		im.surface_add_vertex(_positions[orphan])
 		im.surface_set_color(inline_colour)
 		im.surface_add_vertex(_positions[host])
+
+
+## Dormant references never enter _graph: they explain an orphan without
+## changing reachability. Dashed source-to-ghost means "commented intent";
+## solid ghost-to-target means the ghost represents that exact orphan.
+func _draw_commented_dependency_links(im: ImmediateMesh) -> void:
+	for proxy_any in _comment_proxy_data.keys():
+		var proxy := String(proxy_any)
+		var data: Dictionary = _comment_proxy_data[proxy]
+		var source := String(data.get("source", ""))
+		var target := String(data.get("target", ""))
+		if (
+			not _positions.has(proxy)
+			or not _positions.has(source)
+			or not _positions.has(target)
+			or not _is_displayed(proxy)
+			or not _is_displayed(source)
+			or not _is_displayed(target)
+		):
+			continue
+		var selected_relation := (
+			_selected == proxy or _selected == source or _selected == target
+		)
+		var colour := _connection_alpha(
+			COLOR_COMMENT_LINK,
+			selected_connection_alpha if selected_relation else idle_connection_alpha
+		)
+		_add_dashed_line(im, _positions[source], _positions[proxy], colour)
+		im.surface_set_color(colour)
+		im.surface_add_vertex(_positions[proxy])
+		im.surface_set_color(colour)
+		im.surface_add_vertex(_positions[target])
 
 
 ## Shifts a laid-out orphan tier so its footprint is centred under the entry
@@ -4165,7 +4342,6 @@ func _apply_selection_visuals() -> void:
 		# Reset to base here; _update_label_scaling re-inflates only the ones
 		# that should be, so a node dropping out of the selection shrinks back.
 		label.pixel_size = _base_pixel_size(path2)
-	_label_scale_dirty = true
 
 	if _mesh_instance != null and _mesh_instance.multimesh != null:
 		var mm: MultiMesh = _mesh_instance.multimesh
@@ -4177,7 +4353,142 @@ func _apply_selection_visuals() -> void:
 			if dimming and not related.has(path3):
 				col3.a = DIM_ALPHA
 			mm.set_instance_color(i, col3)
+	_label_scale_dirty = true
+	_update_comment_evidence_card()
 
+
+func _update_comment_evidence_card() -> void:
+	if _evidence_card != null and is_instance_valid(_evidence_card):
+		_evidence_card.queue_free()
+	_evidence_card = null
+	if _evidence_card_viewport != null and is_instance_valid(_evidence_card_viewport):
+		_evidence_card_viewport.queue_free()
+	_evidence_card_viewport = null
+	if not _comment_proxy_data.has(_selected) or not _positions.has(_selected):
+		return
+	var data: Dictionary = _comment_proxy_data[_selected]
+	var source := String(data.get("source", ""))
+	var target := String(data.get("target", ""))
+	var entries: Array = data.get("evidence", [])
+	var lines: Array[String] = [
+		"COMMENTED DEPENDENCY",
+		"",
+		source.get_file() + "  →  " + target.get_file(),
+	]
+	for entry_index in mini(entries.size(), 4):
+		var evidence: Dictionary = entries[entry_index]
+		lines.append("")
+		lines.append("%s · line %d" % [
+			String(evidence.get("function_signature", "<file scope>")),
+			int(evidence.get("line", 0)),
+		])
+		var assignment := String(evidence.get("assignment", ""))
+		if assignment != "":
+			lines.append("assignment: " + assignment)
+		var arguments: Array = evidence.get("arguments", [])
+		if not arguments.is_empty():
+			lines.append("arguments: " + ", ".join(arguments))
+		lines.append("")
+		for context_any in evidence.get("context", []):
+			var context: Dictionary = context_any
+			lines.append(_format_evidence_source_line(context))
+	if entries.size() > 4:
+		lines.append("")
+		lines.append("+ %d more commented reference(s)" % (entries.size() - 4))
+	lines.append("")
+	lines.append("Target remains orphaned; this is dormant evidence only.")
+
+	var longest_line := 1
+	for card_line_any in lines:
+		longest_line = maxi(longest_line, String(card_line_any).length())
+	# Generous inner margins prevent font ascenders, outlines and the final
+	# source line from being clipped by the viewport texture.
+	var card_width_pixels := clampi(longest_line * 19 + 112, 640, 3200)
+	var card_height_pixels := maxi(lines.size() * 44 + 104, 280)
+
+	# Compose background and text into one texture. Two independent
+	# transparent billboards sort differently while the camera moves, causing
+	# the text to flicker through or detach from its backing plane.
+	var viewport := SubViewport.new()
+	viewport.size = Vector2i(card_width_pixels, card_height_pixels)
+	viewport.transparent_bg = true
+	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	var background := ColorRect.new()
+	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	background.color = Color(0.015, 0.045, 0.055, 0.82)
+	viewport.add_child(background)
+	var text := Label.new()
+	text.text = "\n".join(lines)
+	text.position = Vector2(44.0, 38.0)
+	text.size = Vector2(card_width_pixels - 88, card_height_pixels - 76)
+	text.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	text.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	text.autowrap_mode = TextServer.AUTOWRAP_OFF
+	text.clip_text = false
+	var code_font := SystemFont.new()
+	code_font.font_names = PackedStringArray([
+		"JetBrains Mono", "Noto Sans Mono", "DejaVu Sans Mono", "monospace",
+	])
+	text.add_theme_font_override("font", code_font)
+	text.add_theme_font_size_override("font_size", 30)
+	text.add_theme_color_override("font_color", Color(0.88, 1.0, 1.0))
+	text.add_theme_color_override("font_outline_color", Color(0.02, 0.10, 0.12))
+	text.add_theme_constant_override("outline_size", 4)
+	viewport.add_child(text)
+	_visuals_root.add_child(viewport)
+
+	var card := Sprite3D.new()
+	card.texture = viewport.get_texture()
+	card.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	card.pixel_size = 0.008
+	card.shaded = false
+	card.transparent = true
+	card.no_depth_test = true
+	var card_position := Vector3(_positions[_selected]) + Vector3(
+		node_min_separation * 1.4, vertical_layer_separation * 0.25, 0.0
+	)
+	card.position = card_position
+	card.visibility_range_end = 0.0
+	_visuals_root.add_child(card)
+	_evidence_card_viewport = viewport
+	_evidence_card = card
+
+
+func _format_evidence_source_line(context: Dictionary) -> String:
+	var raw := String(context.get("text", ""))
+	var indent_guides := ""
+	while raw.begins_with("\t"):
+		indent_guides += "│   "
+		raw = raw.trim_prefix("\t")
+	var leading_spaces := raw.length() - raw.strip_edges(true, false).length()
+	while leading_spaces >= 4:
+		indent_guides += "│   "
+		raw = raw.substr(4)
+		leading_spaces -= 4
+	var marker := "▶" if bool(context.get("focus", false)) else " "
+	return "%s %5d │ %s%s" % [
+		marker, int(context.get("line", 0)), indent_guides, raw,
+	]
+
+
+func _focus_comment_relation(proxy: String) -> void:
+	if not _comment_proxy_data.has(proxy):
+		return
+	var data: Dictionary = _comment_proxy_data[proxy]
+	var points: Array[Vector3] = [Vector3(_positions.get(proxy, Vector3.ZERO))]
+	for key in ["source", "target"]:
+		var path := String(data.get(key, ""))
+		if _positions.has(path):
+			points.append(Vector3(_positions[path]))
+	var centre := Vector3.ZERO
+	for point in points:
+		centre += point
+	centre /= float(points.size())
+	var radius := 1.0
+	for point in points:
+		radius = maxf(radius, point.distance_to(centre))
+	var back := maxf(radius * 2.4, 14.0)
+	_camera.focus_on(centre, Vector3(back * 0.4, back * 0.65, back))
 
 ## Spawns at the entry point looking down over the graph, so you always start
 ## where the project starts rather than at an arbitrary bounding-box centre.
@@ -6730,7 +7041,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		await _toggle_hidden_group(hit)
 		return
 	# A proxy stands in for its file, so clicking it selects that file.
-	hit = _resolve_proxy(hit)
+	# Dormant ghosts remain independently selectable because they own the
+	# in-world evidence card; ordinary embedded proxies still select the file.
+	if not _comment_proxy_data.has(hit):
+		hit = _resolve_proxy(hit)
 	if _analysis_mode != AnalysisMode.NONE and hit != "" and hit != _selected:
 		_stop_path_trace()
 		_analysis_mode = AnalysisMode.NONE   # a new selection asks a new question
@@ -6756,13 +7070,15 @@ func _unhandled_input(event: InputEvent) -> void:
 	_selected = "" if hit == _selected else hit
 	_update_gather_for_selection()
 	if _selected != "":
-		_reveal_in_tree(_selected)
+		_reveal_in_tree(_resolve_proxy(_selected))
 	_update_info()
 	if _isolate_mode:
 		await _refresh_visuals()
 	else:
 		_rebuild_edges()
 		_apply_selection_visuals()
+	if (event as InputEventMouseButton).double_click and _comment_proxy_data.has(hit):
+		_focus_comment_relation(hit)
 
 
 func _pick_node() -> String:
@@ -6833,6 +7149,35 @@ func _update_info() -> void:
 		_info_label.text = "[color=#8a8f99]Nothing selected.\n\nClick a node in the 3D view, or a file on the left.[/color]"
 		return
 
+	if _comment_proxy_data.has(_selected):
+		var dormant: Dictionary = _comment_proxy_data[_selected]
+		var dormant_source := String(dormant.get("source", ""))
+		var dormant_target := String(dormant.get("target", ""))
+		var dormant_entries: Array = dormant.get("evidence", [])
+		var dormant_out: Array[String] = [
+			"[color=#47e0eb][b]COMMENTED DEPENDENCY[/b][/color]",
+			"",
+			"[b]source[/b]  [url=%s]%s[/url]" % [
+				dormant_source, dormant_source.get_file()
+			],
+			"[b]target[/b]  [url=%s]%s[/url]" % [
+				dormant_target, dormant_target.get_file()
+			],
+			"",
+			"[color=#8a8f99]Dormant evidence only. The target remains an orphan.[/color]",
+			"[color=#8a8f99]The complete source evidence is displayed beside this ghost in the 3D world.[/color]",
+		]
+		for dormant_entry_any in dormant_entries:
+			var dormant_entry: Dictionary = dormant_entry_any
+			dormant_out.append("")
+			dormant_out.append("[b]%s · line %d[/b]" % [
+				String(dormant_entry.get("function_signature", "<file scope>")),
+				int(dormant_entry.get("line", 0)),
+			])
+			dormant_out.append(String(dormant_entry.get("expression", "")))
+		_info_label.text = "\n".join(dormant_out)
+		return
+
 	var out: Array = []
 	var accent := _color_for(_selected).to_html(false)
 	out.append("[b][color=#%s]%s[/color][/b]" % [accent, _selected.get_file()])
@@ -6895,6 +7240,14 @@ func _update_info() -> void:
 
 	if _orphan_set.has(_selected):
 		out.append("[color=#ff5b4f][b]ORPHAN[/b] — never reached from an entry point[/color]")
+		if _has_comment_evidence(_selected):
+			var dormant_count: int = (_comment_targets[_selected] as Array).size()
+			out.append("")
+			out.append(
+				"[color=#47e0eb][b]DORMANT REFERENCES[/b] — %d commented occurrence(s)[/color]"
+				% dormant_count
+			)
+			out.append("[color=#8a8f99]These comments do not make the file reachable. Select its cyan ghost node to inspect the exact code in-world.[/color]")
 		if _orphan_notes.has(_selected):
 			var dup := String(_orphan_notes[_selected])
 			out.append("")

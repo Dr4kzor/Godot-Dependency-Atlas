@@ -68,6 +68,27 @@ func _run() -> void:
 		"res://stale_debug.json" in orphan_paths,
 		"commented res:// path falsely made an unused data file reachable"
 	)
+	var dormant: Array = result.get("commented_dependencies", [])
+	var stale_evidence := {}
+	for evidence_any in dormant:
+		var evidence: Dictionary = evidence_any
+		if String(evidence.get("target", "")) == "res://stale_debug.json":
+			stale_evidence = evidence
+			break
+	_expect(not stale_evidence.is_empty(), "commented dependency evidence was not recorded")
+	_expect(
+		String(stale_evidence.get("source", "")) == "res://native/native_user.gd",
+		"commented dependency source was incorrect"
+	)
+	_expect(int(stale_evidence.get("line", 0)) > 0, "commented dependency line was not recorded")
+	_expect(
+		String(stale_evidence.get("function_signature", "")) != "",
+		"commented dependency scope was not recorded"
+	)
+	_expect(
+		(stale_evidence.get("context", []) as Array).size() >= 3,
+		"commented dependency source context was not recorded"
+	)
 	if failures == 0:
 		print("Mixed-language scanner: all tests passed")
 	quit(failures)

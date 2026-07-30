@@ -452,6 +452,16 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 			continue
 		orphans.append({"path": p4, "size": _file_size(p4)})
 
+	# Comment-only references are evidence of dormant intent, not live
+	# reachability. Record them after reachability is final so they can
+	# annotate an orphan without ever rescuing it from the orphan list.
+	var orphan_paths := {}
+	for orphan_any in orphans:
+		orphan_paths[String((orphan_any as Dictionary)["path"])] = true
+	var commented_dependencies := _commented_dependency_evidence(
+		content_cache, file_set, orphan_paths
+	)
+
 	# Orphans were never traversed, so nothing recorded what THEY reference --
 	# graph[] only has entries for files the walk actually reached. Without
 	# this pass every orphan looks isolated, and a dead subsystem of five
@@ -533,6 +543,7 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 		"dynamic_dirs": dynamic_dirs,
 		"graph": graph,
 		"edge_kinds": edge_kinds,
+		"commented_dependencies": commented_dependencies,
 		"depth": depth,
 		"tree_parent": tree_parent,
 		"unresolved_refs": unresolved_refs,
@@ -541,6 +552,108 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 		"truncated_files": truncated,
 		"error": "",
 	}
+
+
+static func _commented_dependency_evidence(
+	content_cache: Dictionary, file_set: Dictionary, orphan_paths: Dictionary
+) -> Array:
+	var evidence: Array = []
+	for source_any in content_cache.keys():
+		var source := String(source_any)
+		if source.get_extension().to_lower() != "gd":
+			continue
+		var function_signature := "<file scope>"
+		var lines := String(content_cache[source]).split("\n")
+		for line_index in lines.size():
+			var raw_line := String(lines[line_index])
+			var executable := raw_line.strip_edges()
+			if executable.begins_with("func "):
+				function_signature = executable.trim_suffix(":") + ":"
+			var comment_column := _gdscript_comment_column(raw_line)
+			if comment_column == -1:
+				continue
+			var comment := raw_line.substr(comment_column + 1).strip_edges()
+			if comment == "":
+				continue
+			for token_any in _extract_res_tokens(comment):
+				var reference := String(token_any)
+				var target := _longest_known_prefix(reference, file_set)
+				if target == "" or not orphan_paths.has(target):
+					continue
+				evidence.append({
+					"source": source,
+					"target": target,
+					"kind": "commented_path",
+					"line": line_index + 1,
+					"column": comment_column + 1,
+					"function_signature": function_signature,
+					"expression": comment,
+					"reference": reference,
+					"assignment": _comment_assignment_name(comment),
+					"arguments": _comment_call_arguments(comment),
+					"context": _source_context(lines, line_index, 2),
+				})
+	return evidence
+
+
+static func _source_context(lines: PackedStringArray, centre: int, radius: int) -> Array:
+	var context: Array = []
+	var first := maxi(0, centre - radius)
+	var last := mini(lines.size() - 1, centre + radius)
+	for index in range(first, last + 1):
+		context.append({
+			"line": index + 1,
+			"text": String(lines[index]),
+			"focus": index == centre,
+		})
+	return context
+
+
+static func _gdscript_comment_column(line: String) -> int:
+	var in_string := false
+	var quote := ""
+	var escaped := false
+	for i in line.length():
+		var c: String = line[i]
+		if in_string:
+			if not escaped and c == quote:
+				in_string = false
+			if not escaped and c == "\\":
+				escaped = true
+			else:
+				escaped = false
+			continue
+		if c == "\"" or c == "'":
+			in_string = true
+			quote = c
+		elif c == "#":
+			return i
+	return -1
+
+
+static func _comment_assignment_name(expression: String) -> String:
+	var equals := expression.find("=")
+	if equals == -1:
+		return ""
+	var left := expression.substr(0, equals).strip_edges()
+	for prefix in ["var ", "const "]:
+		left = left.trim_prefix(prefix)
+	if ":" in left:
+		left = left.get_slice(":", 0).strip_edges()
+	return left if left.is_valid_identifier() else ""
+
+
+static func _comment_call_arguments(expression: String) -> Array:
+	var open := expression.find("(")
+	var close := expression.rfind(")")
+	if open == -1 or close <= open:
+		return []
+	var out: Array = []
+	for argument_any in expression.substr(open + 1, close - open - 1).split(","):
+		var argument := String(argument_any).strip_edges()
+		if argument != "":
+			out.append(argument)
+	return out
 
 
 # ---------------------------------------------------------------- entry points

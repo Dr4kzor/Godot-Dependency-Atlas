@@ -35,6 +35,83 @@ func _initialize() -> void:
 	}
 	viewer._view_hidden_kinds[int(TypeIcons.Kind.IMAGE)] = true
 
+	var dormant_target := "res://stale_debug.json"
+	viewer._positions[dormant_target] = Vector3(4, -20, 0)
+	viewer._sizes[dormant_target] = 1.0
+	viewer._orphan_set[dormant_target] = true
+	viewer._comment_targets[dormant_target] = [{
+		"source": script,
+		"target": dormant_target,
+		"line": 42,
+		"function_signature": "func _ready():",
+		"expression": 'load("res://stale_debug.json")',
+		"context": [
+			{"line": 41, "text": "func _ready():", "focus": false},
+			{"line": 42, "text": "\t#load(\"res://stale_debug.json\")", "focus": true},
+		],
+	}]
+	var dormant_groups: Dictionary = viewer._orphan_groups()
+	_expect(
+		dormant_target in (dormant_groups.get("commented", []) as Array),
+		"comment-evidenced orphan did not receive its own visual category"
+	)
+	viewer._place_comment_proxies([dormant_target])
+	var dormant_proxy := viewer._comment_proxy_path_for(script, dormant_target)
+	_expect(viewer._positions.has(dormant_proxy), "commented dependency ghost was not placed")
+	var dormant_position: Vector3 = viewer._positions[dormant_proxy]
+	var source_position: Vector3 = viewer._positions[script]
+	_expect(
+		is_equal_approx(dormant_position.x, source_position.x)
+			and is_equal_approx(dormant_position.z, source_position.z),
+		"commented dependency ghost was not kept directly below its source"
+	)
+	_expect(
+		is_equal_approx(
+			dormant_position.y,
+			source_position.y - viewer.vertical_layer_separation * viewer.PROXY_DROP
+		),
+		"commented dependency ghost used the wrong vertical drop"
+	)
+	_expect(
+		viewer._resolve_proxy(dormant_proxy) == dormant_target,
+		"commented dependency ghost did not resolve to its real orphan"
+	)
+	viewer._positions[script] = Vector3(19, 7, -11)
+	viewer._anchor_comment_proxies()
+	dormant_position = viewer._positions[dormant_proxy]
+	source_position = viewer._positions[script]
+	_expect(
+		is_equal_approx(dormant_position.x, source_position.x)
+			and is_equal_approx(dormant_position.z, source_position.z),
+		"commented dependency ghost detached after its source moved"
+	)
+	viewer._visuals_root = Node3D.new()
+	viewer.add_child(viewer._visuals_root)
+	viewer._selected = dormant_proxy
+	viewer._update_comment_evidence_card()
+	var preview_text := viewer._evidence_card_viewport.get_child(1) as Label
+	_expect(
+		preview_text.horizontal_alignment == HORIZONTAL_ALIGNMENT_LEFT,
+		"comment evidence preview text was not left aligned"
+	)
+	_expect(
+		"▶    42 │ │   #load" in preview_text.text,
+		"comment evidence preview omitted its editor-style gutter or indentation"
+	)
+	_expect(
+		viewer._evidence_card_viewport != null,
+		"comment evidence preview has no readability background"
+	)
+	var evidence_background := viewer._evidence_card_viewport.get_child(0) as ColorRect
+	_expect(
+		evidence_background.color.a > 0.0 and evidence_background.color.a < 1.0,
+		"comment evidence background is not semi-transparent"
+	)
+	_expect(
+		viewer._evidence_card.texture == viewer._evidence_card_viewport.get_texture(),
+		"comment evidence background and text were not composited into one surface"
+	)
+
 	_expect(viewer._is_view_hidden(image_a), "visibility hides image nodes")
 	_expect(
 		not viewer._is_displayed(image_a),
