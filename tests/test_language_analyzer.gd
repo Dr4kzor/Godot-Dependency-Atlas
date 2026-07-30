@@ -1,6 +1,6 @@
 extends SceneTree
 
-const Analyzer = preload("res://addons/orphan_finder/language_analyzer.gd")
+const Analyzer = preload("res://addons/godot_dependency_atlas/language_analyzer.gd")
 var failures := 0
 
 func _initialize() -> void:

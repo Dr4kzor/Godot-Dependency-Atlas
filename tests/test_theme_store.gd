@@ -1,13 +1,13 @@
 extends SceneTree
 
-const Store = preload("res://addons/orphan_finder/graph3d/theme_store.gd")
-const Themes = preload("res://addons/orphan_finder/graph3d/of_themes.gd")
+const Store = preload("res://addons/godot_dependency_atlas/graph3d/theme_store.gd")
+const Themes = preload("res://addons/godot_dependency_atlas/graph3d/of_themes.gd")
 
 var failures := 0
 
 
 func _initialize() -> void:
-	var root := "user://orphan_finder_theme_store_test_%d" % Time.get_ticks_msec()
+	var root := "user://dependency_atlas_theme_store_test_%d" % Time.get_ticks_msec()
 	var node_colors := {
 		"kind_SCENE": Color("#123456"),
 		"role_root": Color("#abcdef"),

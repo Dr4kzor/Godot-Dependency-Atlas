@@ -1,6 +1,6 @@
 extends SceneTree
 
-const Scanner = preload("res://addons/orphan_finder/orphan_scanner.gd")
+const Scanner = preload("res://addons/godot_dependency_atlas/orphan_scanner.gd")
 var failures := 0
 
 func _initialize() -> void:
@@ -13,7 +13,7 @@ func _expect(condition: bool, message: String) -> void:
 
 func _run() -> void:
 	Scanner.scan_root = ProjectSettings.globalize_path("res://tests/fixtures/multilang_project")
-	Scanner.log_dir = Scanner.scan_root + "/orphan_finder/logs"
+	Scanner.log_dir = Scanner.scan_root + "/dependency_atlas/logs"
 	var result: Dictionary = await Scanner.scan_async()
 	_expect(String(result.get("error", "")) == "", "mixed-language scan failed: " + String(result.get("error", "")))
 	var roots: Array = result.get("roots", [])
