@@ -22,6 +22,13 @@ cannot observe every path assembled or dependency selected at runtime.
 - Visualizes dependency and folder layouts in 3D, with selection tracing,
   change-impact analysis, isolation, relation gathering, naming groups, file
   filtering, visibility controls, themes, and layout diagnostics.
+- Can collapse visually hidden dependencies into local expandable aggregates
+  beside each consumer, separated by file kind. For example, two scenes using
+  images receive independent `Images used by …` nodes rather than one
+  project-wide image bucket. Relationships are deduplicated and terminate at
+  the local aggregate even while its member proxies are expanded.
+- Labels deliberate layout groups in 3D and states whether they were formed
+  from a shared naming prefix or a shared dominant referrer and file type.
 - Shows dependency cycles and distinguishes incoming, outgoing, and dangling
   resource connections.
 - Scans another Godot project directory without modifying it.
@@ -101,6 +108,21 @@ Basic navigation:
 - `F3`: scan another Godot project
 
 The in-view **Help** button documents every toolbar state and shortcut.
+Use **Spacing** to tune the minimum distance between ordinary nodes, members
+of the same group, separate groups, and vertical Y-axis layers. Expanded
+hidden-resource bundles form a label-aware square grid near their original
+computed area, reserve that entire area against collisions, and appear one
+Y layer lower. After a slider settles, the complete graph recomputes and
+animates into its new layout. Visually hidden types are also omitted from
+placement, so visible nodes close the gaps while analysis remains unchanged;
+Pack Hidden aggregates reserve fresh space in that compact layout.
+Selecting a class highlights its base class and reports the inheritance
+relationship in the Selection panel. Child-to-base connections use a
+theme-specific inheritance colour and directional arrowhead; selecting a base
+also lists its direct child classes.
+The **Group Info** toolbar toggle shows or hides the 3D labels that explain
+why files were grouped. It affects annotations only; grouping and layout stay
+unchanged, and the choice is saved per project.
 
 ### External projects
 

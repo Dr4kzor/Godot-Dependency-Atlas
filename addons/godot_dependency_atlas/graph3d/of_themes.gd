@@ -241,6 +241,7 @@ const CONNECTION_THEMES := {
 		"in": Color("#55c2ff"),
 		"dangling": Color("#ff5f5f"),
 		"inline": Color("#b779ff"),
+		"inheritance": Color("#35e6c3"),
 		"path": Color("#55e88b"),
 		"impact": Color("#ff7a45"),
 		"pulse": Color("#d5ffe4"),
@@ -251,6 +252,7 @@ const CONNECTION_THEMES := {
 		"in": Color("#00c8ff"),
 		"dangling": Color("#ff3b3b"),
 		"inline": Color("#df5cff"),
+		"inheritance": Color("#00ff9d"),
 		"path": Color("#35ff68"),
 		"impact": Color("#ff7900"),
 		"pulse": Color("#ffffff"),
@@ -261,6 +263,7 @@ const CONNECTION_THEMES := {
 		"in": Color("#56b4e9"),
 		"dangling": Color("#d55e00"),
 		"inline": Color("#cc79a7"),
+		"inheritance": Color("#009e73"),
 		"path": Color("#009e73"),
 		"impact": Color("#f0e442"),
 		"pulse": Color("#e8f7ff"),
@@ -271,6 +274,7 @@ const CONNECTION_THEMES := {
 		"in": Color("#6f9fbe"),
 		"dangling": Color("#b86f69"),
 		"inline": Color("#9b7db5"),
+		"inheritance": Color("#79b8a0"),
 		"path": Color("#7eae83"),
 		"impact": Color("#c57d5c"),
 		"pulse": Color("#d0ddd5"),
@@ -281,6 +285,7 @@ const CONNECTION_THEMES := {
 		"in": Color("#268bd2"),
 		"dangling": Color("#dc322f"),
 		"inline": Color("#6c71c4"),
+		"inheritance": Color("#2aa198"),
 		"path": Color("#859900"),
 		"impact": Color("#b58900"),
 		"pulse": Color("#93d6cf"),
@@ -291,6 +296,7 @@ const CONNECTION_THEMES := {
 		"in": Color("#88c0d0"),
 		"dangling": Color("#bf616a"),
 		"inline": Color("#b48ead"),
+		"inheritance": Color("#8fbcbb"),
 		"path": Color("#a3be8c"),
 		"impact": Color("#ebcb8b"),
 		"pulse": Color("#e5e9f0"),
@@ -301,6 +307,7 @@ const CONNECTION_THEMES := {
 		"in": Color("#83a598"),
 		"dangling": Color("#fb4934"),
 		"inline": Color("#d3869b"),
+		"inheritance": Color("#8ec07c"),
 		"path": Color("#b8bb26"),
 		"impact": Color("#fabd2f"),
 		"pulse": Color("#ebdbb2"),
@@ -311,6 +318,7 @@ const CONNECTION_THEMES := {
 		"in": Color("#8be9fd"),
 		"dangling": Color("#ff5555"),
 		"inline": Color("#bd93f9"),
+		"inheritance": Color("#50fa7b"),
 		"path": Color("#50fa7b"),
 		"impact": Color("#f1fa8c"),
 		"pulse": Color("#f8f8f2"),
@@ -321,6 +329,7 @@ const CONNECTION_THEMES := {
 		"in": Color("#36f9f6"),
 		"dangling": Color("#fe4450"),
 		"inline": Color("#b967ff"),
+		"inheritance": Color("#72f1b8"),
 		"path": Color("#72f1b8"),
 		"impact": Color("#fede5d"),
 		"pulse": Color("#ffffff"),
@@ -331,6 +340,7 @@ const CONNECTION_THEMES := {
 		"in": Color("#7fdbff"),
 		"dangling": Color("#ff6b8a"),
 		"inline": Color("#b49bff"),
+		"inheritance": Color("#86e5d0"),
 		"path": Color("#86e5d0"),
 		"impact": Color("#ffab70"),
 		"pulse": Color("#ffffff"),
@@ -341,6 +351,7 @@ const CONNECTION_THEMES := {
 		"in": Color("#1f6feb"),
 		"dangling": Color("#c1121f"),
 		"inline": Color("#7d3ac1"),
+		"inheritance": Color("#0d7d78"),
 		"path": Color("#1a7f37"),
 		"impact": Color("#b4310f"),
 		"pulse": Color("#0d7d78"),
@@ -364,14 +375,21 @@ static func connection_label_of(theme_id: String) -> String:
 
 
 ## All connection colour keys, in display order.
-const CONNECTION_KEYS := ["out", "in", "dangling", "inline", "path", "impact", "pulse"]
+const CONNECTION_KEYS := [
+	"out", "in", "dangling", "inline", "inheritance", "path", "impact", "pulse"
+]
 
 
 static func connection_color(theme_id: String, key: String) -> Color:
 	var selected: Dictionary = CUSTOM_CONNECTION_THEMES.get(
 		theme_id, CONNECTION_THEMES.get(theme_id, CONNECTION_THEMES[DEFAULT_CONNECTION_THEME])
 	)
-	return selected.get(key, Color(0.7, 0.7, 0.7))
+	return selected.get(
+		key,
+		(CONNECTION_THEMES[DEFAULT_CONNECTION_THEME] as Dictionary).get(
+			key, Color(0.7, 0.7, 0.7)
+		)
+	)
 
 
 static func clear_custom_themes() -> void:

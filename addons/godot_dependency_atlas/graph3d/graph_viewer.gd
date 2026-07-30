@@ -87,6 +87,7 @@ const MIN_LABEL_PIXELS_SELECTED := 12.0   # selection + its direct connections
 const MIN_LABEL_PIXELS_GLOBAL := 11.0     # everything else, only when M is on
 ## The selected node's own label is drawn a little larger again.
 const SELECTED_LABEL_SCALE := 1.20   # the selection itself, relative to its neighbours
+const INHERITANCE_ARROW_SIZE := 0.65
 
 # --- analysis overlays -------------------------------------------------------
 const COLOR_PATH := Color(0.40, 1.00, 0.55)     # a live chain from an entry point
@@ -142,6 +143,8 @@ const FAMILY_BASE_GAP := 6.0
 ## crowded layout degrades rather than stalling.
 const RESERVE_ATTEMPTS := 40
 const RESERVE_MARGIN := 3.0
+const SPACING_RELAYOUT_DELAY := 0.18
+const SPACING_ANIMATION_SECONDS := 0.45
 
 # --- proximity relaxation ----------------------------------------------------
 ## Pulls loosely-connected files toward whatever references them.
@@ -257,6 +260,7 @@ const PROXY_KINDS := ["tres", "res", "gdshader", "gdshaderinc"]
 ## Prefix marking a proxy pseudo-path, so it can be positioned and picked
 ## without colliding with the real file's entry.
 const PROXY_PREFIX := "::proxy::"
+const HIDDEN_GROUP_PREFIX := "::hidden_group::"
 const PROXY_DROP := 1.2            # layers below the host it is embedded in
 const PROXY_SIZE := 0.5
 const DASH_LENGTH := 0.9
@@ -304,7 +308,7 @@ const PANEL_MIN_WIDTH := 180.0
 @export_range(8.0, 256.0, 1.0) var toolbar_min_height := 24.0
 @export_range(8.0, 512.0, 1.0) var toolbar_max_height := 64.0
 @export_range(8.0, 256.0, 1.0) var toolbar_initial_height := 24.0
-@export var toolbar_show_labels := false
+@export var toolbar_show_labels := true
 const TREE_ICON_SIZE := 16    # matches the editor FileSystem dock
 
 # --- icons / selection -------------------------------------------------------
@@ -343,6 +347,13 @@ var _filter_window: Window
 var _visibility_window: Window
 var _view_hidden_kinds := {}
 var _view_hidden_extensions := {}
+var _pack_hidden_resources := false
+var _hidden_group_expanded := {} # aggregate pseudo-path -> bool
+var _hidden_group_members := {}  # aggregate pseudo-path -> hidden file paths
+var _hidden_group_kind := {}     # aggregate pseudo-path -> TypeIcons.Kind
+var _hidden_group_owner := {}    # aggregate pseudo-path -> visible consumer
+var _hidden_member_of := {}      # expanded local proxy -> real hidden file
+var _hidden_member_group := {}   # expanded local proxy -> aggregate node
 var _legend_window: Window
 var _open_dialog: FileDialog
 var _scan_root := "res://"
@@ -359,7 +370,11 @@ var _diagnostics_dialog: AcceptDialog
 var _diagnostics_input: LineEdit
 var _name_groups := {}        # group key -> { token, dir, members, confidence }
 var _name_group_of := {}      # path -> group key
+var _group_annotations := {}  # visual group key -> { members, title, reason }
+var _show_group_reasoning := true
+var _group_reason_labels: Array[Label3D] = []
 var _parent_of := {}          # path -> the file it extends
+var _class_of := {}           # path -> declared class name, when available
 var _group_affinity := true
 var _relax_layout := true
 var _hierarchy_placed := {}   # bases positioned by _centre_hierarchy_bases
@@ -387,6 +402,7 @@ var _theme_proxied := COLOR_PROXIED
 var _theme_duplicated := COLOR_DUPLICATED
 var _theme_dangling := COLOR_ORPHAN_EDGE
 var _theme_inline := COLOR_EMBED_LINK
+var _theme_inheritance := Color(0.35, 1.0, 0.85)
 var _theme_path := COLOR_PATH
 var _theme_impact := COLOR_BLAST
 var _theme_pulse := COLOR_TRACE_PULSE
@@ -394,6 +410,16 @@ var _theme_pulse := COLOR_TRACE_PULSE
 ## dependency-atlas.config for easy per-project tuning.
 var idle_connection_alpha := OFConfig.DEFAULT_IDLE_CONNECTION_ALPHA
 var selected_connection_alpha := OFConfig.DEFAULT_SELECTED_CONNECTION_ALPHA
+## User-editable layout clearances. These are persisted in the scanned
+## project's dependency-atlas.config [layout] section.
+var node_min_separation := OFConfig.DEFAULT_NODE_MIN_SEPARATION
+var group_member_min_separation := OFConfig.DEFAULT_GROUP_MEMBER_MIN_SEPARATION
+var group_min_separation := OFConfig.DEFAULT_GROUP_MIN_SEPARATION
+var vertical_layer_separation := OFConfig.DEFAULT_VERTICAL_LAYER_SEPARATION
+var _spacing_popup: PopupPanel
+var _spacing_value_labels := {}
+var _spacing_change_serial := 0
+var _spacing_tween: Tween
 var _world_env: WorldEnvironment
 var _theme_is_dark := true
 var _theme_background := Color(0.07, 0.08, 0.11)
@@ -527,6 +553,7 @@ func _run_scan() -> void:
 	_proxy_of.clear()
 	_orphan_graph.clear()
 	_parent_of.clear()
+	_class_of.clear()
 	_reverse_graph.clear()
 	_embed_hosts.clear()
 	_in_degree.clear()
@@ -612,6 +639,7 @@ func _run_scan() -> void:
 	# files can belong to one feature without referencing each other.
 	var hierarchy: Dictionary = result.get("hierarchy", {})
 	_parent_of = hierarchy.get("parent_of", {})
+	_class_of = hierarchy.get("class_of", {})
 	_name_groups = NamingAffinity.analyse(_all_paths())
 	# Inheritance overrides the naming grouping: a prefix family that is
 	# really a class hierarchy gets split by level instead of flattened.
@@ -660,6 +688,9 @@ func _apply_connection_theme() -> void:
 	_theme_in = _overrides.connection_color(_connection_theme_id, "in")
 	_theme_dangling = _overrides.connection_color(_connection_theme_id, "dangling")
 	_theme_inline = _overrides.connection_color(_connection_theme_id, "inline")
+	_theme_inheritance = _overrides.connection_color(
+		_connection_theme_id, "inheritance"
+	)
 	_theme_path = _overrides.connection_color(_connection_theme_id, "path")
 	_theme_impact = _overrides.connection_color(_connection_theme_id, "impact")
 	_theme_pulse = _overrides.connection_color(_connection_theme_id, "pulse")
@@ -713,12 +744,49 @@ func _is_hidden(path: String) -> bool:
 ## In isolate mode only the selection and its direct neighbours are drawn.
 ## Everything keeps its layout position, so toggling back is not disorienting.
 func _is_view_hidden(path: String) -> bool:
-	if path == ORPHAN_HUB or path == CLUSTER_HUB or _dir_nodes.has(path):
+	if (
+		path == ORPHAN_HUB
+		or path == CLUSTER_HUB
+		or path.begins_with(HIDDEN_GROUP_PREFIX)
+		or _dir_nodes.has(path)
+	):
 		return false
 	var actual := _resolve_proxy(path)
+	var hidden := false
 	if _view_hidden_kinds.has(int(TypeIcons.kind_of(actual))):
-		return true
-	return _view_hidden_extensions.has(actual.get_extension().to_lower())
+		hidden = true
+	elif _view_hidden_extensions.has(actual.get_extension().to_lower()):
+		hidden = true
+	return hidden
+
+
+func _is_configured_view_hidden(path: String) -> bool:
+	if path.begins_with("::") or _dir_nodes.has(path):
+		return false
+	var actual := _resolve_proxy(path)
+	return (
+		_view_hidden_kinds.has(int(TypeIcons.kind_of(actual)))
+		or _view_hidden_extensions.has(actual.get_extension().to_lower())
+	)
+
+
+func _hidden_group_path_for(owner: String, hidden_path: String) -> String:
+	return "%s%d::%s" % [
+		HIDDEN_GROUP_PREFIX,
+		int(TypeIcons.kind_of(_resolve_proxy(hidden_path))),
+		owner,
+	]
+
+
+func _edge_endpoint(path: String, owner: String = "") -> String:
+	if _pack_hidden_resources and _is_configured_view_hidden(path):
+		if owner == "" or _is_configured_view_hidden(owner):
+			return ""
+		var aggregate := _hidden_group_path_for(owner, path)
+		if _positions.has(aggregate):
+			return aggregate
+		return ""
+	return path
 
 
 func _is_displayed(path: String) -> bool:
@@ -740,7 +808,7 @@ func _all_paths() -> Array:
 			if not _is_hidden(String(r)):
 				out[String(r)] = true
 	for key in _orphan_set.keys():
-		if not _is_hidden(String(key)):
+		if not _is_hidden(String(key)) and not _is_configured_view_hidden(String(key)):
 			out[String(key)] = true
 	var list: Array = out.keys()
 	list.sort()
@@ -803,6 +871,67 @@ func _build_folder_tree() -> Dictionary:
 		children[current].append(path)
 
 	return {"children": children, "depth": depth, "roots": [root]}
+
+
+## Removes visually hidden files from the placement hierarchy while keeping
+## the computed dependency graph untouched. Visible descendants are promoted
+## to the nearest visible ancestor, so hiding a file kind closes the empty
+## holes instead of preserving invisible node footprints.
+func _compact_view_hidden_tree(tree: Dictionary) -> Dictionary:
+	if _view_hidden_kinds.is_empty() and _view_hidden_extensions.is_empty():
+		return tree
+	var old_children: Dictionary = tree["children"]
+	var old_depth: Dictionary = tree["depth"]
+	var old_parent := {}
+	for parent_any in old_children.keys():
+		var parent := String(parent_any)
+		for child_any in old_children[parent]:
+			old_parent[String(child_any)] = parent
+
+	var children := {}
+	var depth := {}
+	var roots: Array = []
+	var visible_nodes: Array = []
+	for node_any in old_depth.keys():
+		var node := String(node_any)
+		if not _is_configured_view_hidden(node):
+			visible_nodes.append(node)
+
+	var visible_parent := {}
+	for node_any in visible_nodes:
+		var node := String(node_any)
+		var parent := String(old_parent.get(node, ""))
+		while parent != "" and _is_configured_view_hidden(parent):
+			parent = String(old_parent.get(parent, ""))
+		if parent != "" and visible_nodes.has(parent):
+			visible_parent[node] = parent
+			if not children.has(parent):
+				children[parent] = []
+			(children[parent] as Array).append(node)
+		else:
+			roots.append(node)
+
+	var unresolved := visible_nodes.duplicate()
+	var next_depth := 0
+	while not unresolved.is_empty():
+		var progressed := false
+		for index in range(unresolved.size() - 1, -1, -1):
+			var node := String(unresolved[index])
+			if not visible_parent.has(node):
+				depth[node] = 0
+			elif depth.has(visible_parent[node]):
+				depth[node] = int(depth[visible_parent[node]]) + 1
+			else:
+				continue
+			unresolved.remove_at(index)
+			progressed = true
+		if not progressed:
+			# Defensive fallback for malformed/cyclic parent data.
+			for node_any in unresolved:
+				depth[String(node_any)] = next_depth
+			break
+		next_depth += 1
+	return {"children": children, "depth": depth, "roots": roots}
 
 
 # ------------------------------------------------------------------ ordering
@@ -873,7 +1002,7 @@ func _pack_shelves(kids: Array) -> Dictionary:
 	var area := 0.0
 	var widest := 0.0
 	for k in kids:
-		var b: Vector2 = _block_size.get(k, Vector2(CELL_SIZE, CELL_SIZE))
+		var b: Vector2 = _block_size.get(k, Vector2(node_min_separation, node_min_separation))
 		area += b.x * b.y
 		widest = maxf(widest, b.x)
 	var target := maxf(sqrt(area * TARGET_ASPECT), widest)
@@ -882,7 +1011,7 @@ func _pack_shelves(kids: Array) -> Dictionary:
 	var current_width := 0.0
 	for k in kids:
 		var path: String = k
-		var b2: Vector2 = _block_size.get(path, Vector2(CELL_SIZE, CELL_SIZE))
+		var b2: Vector2 = _block_size.get(path, Vector2(node_min_separation, node_min_separation))
 		if not current.is_empty() and current_width + b2.x > target:
 			rows.append(current)
 			current = []
@@ -899,7 +1028,7 @@ func _pack_shelves(kids: Array) -> Dictionary:
 		var row_width := 0.0
 		var row_depth := 0.0
 		for k in row:
-			var b3: Vector2 = _block_size.get(k, Vector2(CELL_SIZE, CELL_SIZE))
+			var b3: Vector2 = _block_size.get(k, Vector2(node_min_separation, node_min_separation))
 			row_width += b3.x
 			row_depth = maxf(row_depth, b3.y)
 		total_width = maxf(total_width, row_width)
@@ -950,21 +1079,21 @@ func _layout_grid(tree: Dictionary) -> void:
 		var node: String = n
 		var kids: Array = children.get(node, [])
 		if kids.is_empty():
-			_block_size[node] = Vector2(CELL_SIZE, CELL_SIZE)
+			_block_size[node] = Vector2(node_min_separation, node_min_separation)
 			continue
 		var packed := _pack_shelves(kids)
 		_block_size[node] = Vector2(
-			float(packed["width"]) + BLOCK_PADDING,
-			float(packed["depth"]) + BLOCK_PADDING
+			float(packed["width"]) + group_min_separation,
+			float(packed["depth"]) + group_min_separation
 		)
 
 	# Place roots side by side.
 	var cursor_x := 0.0
 	for i in roots.size():
 		var root: String = roots[i]
-		var b: Vector2 = _block_size.get(root, Vector2(CELL_SIZE, CELL_SIZE))
+		var b: Vector2 = _block_size.get(root, Vector2(node_min_separation, node_min_separation))
 		_positions[root] = Vector3(cursor_x + b.x * 0.5, 0.0, 0.0)
-		cursor_x += b.x + BLOCK_PADDING
+		cursor_x += b.x + group_min_separation
 
 	# Top-down placement: each child sits inside its parent's block.
 	var by_depth_asc: Array = nodes.duplicate()
@@ -978,16 +1107,16 @@ func _layout_grid(tree: Dictionary) -> void:
 		var origin: Vector3 = _positions[node2]
 		var start_x := origin.x - float(packed2["width"]) * 0.5
 		var z := origin.z - float(packed2["depth"]) * 0.5
-		var y := origin.y - LAYER_HEIGHT
+		var y := origin.y - vertical_layer_separation
 		for r in packed2["rows"]:
 			var row: Array = r
 			var row_depth := 0.0
 			for k in row:
-				row_depth = maxf(row_depth, Vector2(_block_size.get(k, Vector2(CELL_SIZE, CELL_SIZE))).y)
+				row_depth = maxf(row_depth, Vector2(_block_size.get(k, Vector2(node_min_separation, node_min_separation))).y)
 			var x := start_x
 			for k in row:
 				var kid: String = k
-				var kb: Vector2 = _block_size.get(kid, Vector2(CELL_SIZE, CELL_SIZE))
+				var kb: Vector2 = _block_size.get(kid, Vector2(node_min_separation, node_min_separation))
 				_positions[kid] = Vector3(x + kb.x * 0.5, y, z + row_depth * 0.5)
 				x += kb.x
 			z += row_depth
@@ -996,6 +1125,7 @@ func _layout_grid(tree: Dictionary) -> void:
 	if _layout_mode == LayoutMode.DEPENDENCY:
 		_place_satellites()
 	_grid_placed.clear()
+	_group_annotations.clear()
 	_reserved.clear()
 	# The tree already occupies space, so it is claimed first: otherwise the
 	# grid passes treat the whole volume as empty and drop blocks on top of
@@ -1044,7 +1174,9 @@ func _place_satellites() -> void:
 		for i in owned.size():
 			var sat: String = owned[i]
 			_positions[sat] = origin + Vector3(
-				SATELLITE_OFFSET * (1.0 + float(i)), -LAYER_HEIGHT * 0.35, SATELLITE_OFFSET
+				SATELLITE_OFFSET * (1.0 + float(i)),
+				-vertical_layer_separation * 0.35,
+				SATELLITE_OFFSET
 			)
 
 
@@ -1087,6 +1219,8 @@ func _proxy_path_for(path: String) -> String:
 
 ## The real file a node stands for: itself, unless it is a proxy.
 func _resolve_proxy(path: String) -> String:
+	if _hidden_member_of.has(path):
+		return String(_hidden_member_of[path])
 	return String(_proxy_of.get(path, path))
 
 
@@ -1119,7 +1253,7 @@ func _orphan_groups() -> Dictionary:
 	var proxied: Array = []
 	for key in _orphan_set.keys():
 		var op: String = key
-		if _is_hidden(op):
+		if _is_hidden(op) or _is_configured_view_hidden(op):
 			continue
 		if _has_proxy(op):
 			proxied.append(op)
@@ -1205,7 +1339,7 @@ func _apply_group_depths() -> void:
 		if average < 0.0:
 			continue
 		var level := int(group.get("hierarchy_level", 0))
-		var target_y := -(average + float(level)) * LAYER_HEIGHT
+		var target_y := -(average + float(level)) * vertical_layer_separation
 
 		# Centre the block on where the group already sits, so packing tidies
 		# the arrangement without teleporting it across the graph.
@@ -1217,6 +1351,14 @@ func _apply_group_depths() -> void:
 		_square_grid(_order_by_kind(members), centre.x, target_y, centre.z)
 		for m2 in members:
 			_grid_placed[String(m2)] = true
+		_group_annotations["naming:" + key] = {
+			"members": members.duplicate(),
+			"title": "%s family" % String(group.get("token", "Named")).capitalize(),
+			"reason": "shared filename prefix in %s (%.0f%% confidence)" % [
+				String(group.get("dir", "the same folder")),
+				float(group.get("confidence", 0.0)) * 100.0,
+			],
+		}
 
 
 
@@ -1300,7 +1442,7 @@ func _pack_shared_parent_sets() -> void:
 		if _positions.has(owner) and not _orphan_set.has(owner):
 			var owner_position: Vector3 = _positions[owner]
 			centre = owner_position
-			target_y = owner_position.y - LAYER_HEIGHT
+			target_y = owner_position.y - vertical_layer_separation
 		else:
 			for m in members:
 				var position: Vector3 = _positions[m]
@@ -1313,6 +1455,12 @@ func _pack_shared_parent_sets() -> void:
 		_square_grid(_order_by_kind(members), centre.x, target_y, centre.z)
 		for m2 in members:
 			_grid_placed[String(m2)] = true
+		var resource_kind := TypeIcons.kind_label(TypeIcons.kind_of(String(members[0])))
+		_group_annotations["owner:" + String(key2)] = {
+			"members": members.duplicate(),
+			"title": "%s set for %s" % [resource_kind, owner.get_file()],
+			"reason": "same dominant referrer and file type",
+		}
 
 
 ## Grids each inheritance family in place, base centred beneath it.
@@ -1338,7 +1486,7 @@ func _reserve_existing_nodes() -> void:
 		var label_width := float(path.get_file().length()) * LABEL_GLYPH_WIDTH + GROUP_CELL_PADDING
 		_reserved.append({
 			"centre": Vector2(position.x, position.z),
-			"half": Vector2(maxf(label_width, CELL_SIZE) * 0.5, CELL_SIZE * 0.5),
+			"half": Vector2(maxf(label_width, node_min_separation) * 0.5, node_min_separation * 0.5),
 			"y": position.y,
 			"owner": path,
 		})
@@ -1350,11 +1498,11 @@ func _reserve_existing_nodes() -> void:
 ## True when a point is clear of every reserved block on its own layer.
 func _is_space_free(point: Vector3, ignore_path: String) -> bool:
 	var label_width := float(ignore_path.get_file().length()) * LABEL_GLYPH_WIDTH + GROUP_CELL_PADDING
-	var half := Vector2(maxf(label_width, CELL_SIZE) * 0.5, CELL_SIZE * 0.5)
+	var half := Vector2(maxf(label_width, node_min_separation) * 0.5, node_min_separation * 0.5)
 	var current: Vector3 = _positions.get(ignore_path, point)
 	for r in _reserved:
 		var rect: Dictionary = r
-		if absf(float(rect["y"]) - point.y) > LAYER_HEIGHT * 0.5:
+		if absf(float(rect["y"]) - point.y) > vertical_layer_separation * 0.5:
 			continue
 		var centre: Vector2 = rect["centre"]
 		# Skip the node's own rectangle.
@@ -1377,7 +1525,7 @@ func _reserve_at(path: String) -> void:
 	var label_width := float(path.get_file().length()) * LABEL_GLYPH_WIDTH + GROUP_CELL_PADDING
 	_reserved.append({
 		"centre": Vector2(position.x, position.z),
-		"half": Vector2(maxf(label_width, CELL_SIZE) * 0.5, CELL_SIZE * 0.5),
+		"half": Vector2(maxf(label_width, node_min_separation) * 0.5, node_min_separation * 0.5),
 		"y": position.y,
 		"owner": path,
 	})
@@ -1385,7 +1533,7 @@ func _reserve_at(path: String) -> void:
 
 func _place_reserved(path: String, preferred: Vector3) -> void:
 	var label_width := float(path.get_file().length()) * LABEL_GLYPH_WIDTH + GROUP_CELL_PADDING
-	var size := Vector2(maxf(label_width, CELL_SIZE), CELL_SIZE)
+	var size := Vector2(maxf(label_width, node_min_separation), node_min_separation)
 	_release_reservation(path)
 	_positions[path] = _reserve_space(preferred, size, path)
 
@@ -1411,12 +1559,12 @@ func _reserve_space(preferred: Vector3, size: Vector2, owner: String = "") -> Ve
 		for r in _reserved:
 			var rect: Dictionary = r
 			# Only blocks sharing a layer can collide visually.
-			if absf(float(rect["y"]) - candidate.y) > LAYER_HEIGHT * 0.5:
+			if absf(float(rect["y"]) - candidate.y) > vertical_layer_separation * 0.5:
 				continue
 			var other_half: Vector2 = rect["half"]
 			var other_centre: Vector2 = rect["centre"]
-			if absf(candidate.x - other_centre.x) < (half.x + other_half.x + RESERVE_MARGIN) \
-					and absf(candidate.z - other_centre.y) < (half.y + other_half.y + RESERVE_MARGIN):
+			if absf(candidate.x - other_centre.x) < (half.x + other_half.x + group_min_separation) \
+					and absf(candidate.z - other_centre.y) < (half.y + other_half.y + group_min_separation):
 				clashes = true
 				break
 		if not clashes:
@@ -1425,16 +1573,16 @@ func _reserve_space(preferred: Vector3, size: Vector2, owner: String = "") -> Ve
 		# Spiral outward: alternate sides so a block does not drift steadily
 		# in one direction away from where it belongs.
 		var ring := float(attempt / 4 + 1)
-		var step := (size.x + RESERVE_MARGIN) * ring
+		var step := (size.x + group_min_separation) * ring
 		match attempt % 4:
 			0:
 				candidate = preferred + Vector3(step, 0.0, 0.0)
 			1:
 				candidate = preferred + Vector3(-step, 0.0, 0.0)
 			2:
-				candidate = preferred + Vector3(0.0, 0.0, (size.y + RESERVE_MARGIN) * ring)
+				candidate = preferred + Vector3(0.0, 0.0, (size.y + group_min_separation) * ring)
 			_:
-				candidate = preferred + Vector3(0.0, 0.0, -(size.y + RESERVE_MARGIN) * ring)
+				candidate = preferred + Vector3(0.0, 0.0, -(size.y + group_min_separation) * ring)
 
 	_reserved.append({
 		"centre": Vector2(candidate.x, candidate.z),
@@ -1452,17 +1600,20 @@ func _square_grid(items: Array, origin_x: float, origin_y: float, origin_z: floa
 	var longest := 0
 	for item in items:
 		longest = maxi(longest, String(item).get_file().length())
-	var pitch := maxf(float(longest) * LABEL_GLYPH_WIDTH + GROUP_CELL_PADDING, GROUP_CELL)
+	var horizontal_pitch := maxf(
+		float(longest) * LABEL_GLYPH_WIDTH + GROUP_CELL_PADDING,
+		group_member_min_separation
+	)
 
 	var per_row := maxi(int(ceil(sqrt(float(items.size())))), 1)
 	var rows := int(ceil(float(items.size()) / float(per_row)))
-	var width := float(per_row - 1) * pitch
-	var depth := float(rows - 1) * pitch
+	var width := float(per_row - 1) * horizontal_pitch
+	var depth := float(rows - 1) * horizontal_pitch
 
 	# Claim the space first: every caller gets collision avoidance without
 	# having to think about it, and a block can never be buried under one
 	# placed earlier.
-	var block := Vector2(width + pitch, depth + pitch)
+	var block := Vector2(width + horizontal_pitch, depth + horizontal_pitch)
 	# Members release any claim they already hold, so a block being regridded
 	# does not collide with its own previous footprint.
 	for item_any in items:
@@ -1472,9 +1623,9 @@ func _square_grid(items: Array, origin_x: float, origin_y: float, origin_z: floa
 	for i in items.size():
 		var path: String = items[i]
 		_positions[path] = Vector3(
-			centre.x + float(i % per_row) * pitch - width * 0.5,
+			centre.x + float(i % per_row) * horizontal_pitch - width * 0.5,
 			centre.y,
-			centre.z + float(i / per_row) * pitch - depth * 0.5
+			centre.z + float(i / per_row) * horizontal_pitch - depth * 0.5
 		)
 	return block
 
@@ -1590,7 +1741,9 @@ func _centre_hierarchy_bases() -> void:
 		# is registered afterwards so nothing else lands on it.
 		_release_reservation(base)
 		_positions[base] = Vector3(
-			base_centre.x, base_centre.y - LAYER_HEIGHT, lowest + FAMILY_BASE_GAP
+			base_centre.x,
+			base_centre.y - vertical_layer_separation,
+			lowest + FAMILY_BASE_GAP
 		)
 		_reserve_at(base)
 		_hierarchy_placed[base] = true
@@ -1641,7 +1794,7 @@ func _grid_remaining_assets() -> void:
 		if owner_path != "" and _positions.has(owner_path) and not _orphan_set.has(owner_path):
 			var owner_position: Vector3 = _positions[owner_path]
 			centre = owner_position
-			target_y = owner_position.y - LAYER_HEIGHT
+			target_y = owner_position.y - vertical_layer_separation
 		else:
 			for m in members:
 				centre += Vector3(_positions[String(m)])
@@ -1694,7 +1847,7 @@ func _place_shared_sinks_near_consumers() -> void:
 			zs.append(consumer_position.z)
 		var preferred := Vector3(
 			_median_coordinate(xs),
-			_median_coordinate(ys) - LAYER_HEIGHT,
+			_median_coordinate(ys) - vertical_layer_separation,
 			_median_coordinate(zs)
 		)
 		_place_reserved(path, preferred)
@@ -1801,7 +1954,9 @@ func _verify_and_repair_families() -> void:
 			base_centre /= float(members.size())
 			_release_reservation(root2)
 			_positions[root2] = Vector3(
-				base_centre.x, base_centre.y - LAYER_HEIGHT, lowest + FAMILY_BASE_GAP
+				base_centre.x,
+				base_centre.y - vertical_layer_separation,
+				lowest + FAMILY_BASE_GAP
 			)
 			_reserve_at(root2)
 			_grid_placed[root2] = true
@@ -1842,7 +1997,9 @@ func _recentre_all_hierarchy_bases() -> void:
 
 		_release_reservation(base)
 		_positions[base] = Vector3(
-			centre.x, centre.y - LAYER_HEIGHT, back_edge + FAMILY_BASE_GAP
+			centre.x,
+			centre.y - vertical_layer_separation,
+			back_edge + FAMILY_BASE_GAP
 		)
 		_reserve_at(base)
 		_hierarchy_placed[base] = true
@@ -1971,10 +2128,10 @@ func _place_orphan_grid() -> void:
 	#   duplicated   other orphans whose code was found elsewhere
 	#   cube         the expand marker
 	#   plain        everything else, behind the cube
-	var proxied_y := lowest - LAYER_HEIGHT * 2.0
-	var duplicated_y := proxied_y - LAYER_HEIGHT * ORPHAN_TIER_DROP
-	var cube_y := duplicated_y - LAYER_HEIGHT * ORPHAN_TIER_DROP
-	var plain_y := cube_y - LAYER_HEIGHT * ORPHAN_TIER_DROP
+	var proxied_y := lowest - vertical_layer_separation * 2.0
+	var duplicated_y := proxied_y - vertical_layer_separation * ORPHAN_TIER_DROP
+	var cube_y := duplicated_y - vertical_layer_separation * ORPHAN_TIER_DROP
+	var plain_y := cube_y - vertical_layer_separation * ORPHAN_TIER_DROP
 	var start_z := anchor.z + ORPHAN_GAP
 
 	var split := _split_lone_and_clustered(plain)
@@ -1993,7 +2150,7 @@ func _place_orphan_grid() -> void:
 	# is reviewed as a unit, so keeping it clear of the loose leftovers makes
 	# both easier to judge.
 	var cluster_y := plain_y
-	var lone_y := plain_y - LAYER_HEIGHT * ORPHAN_TIER_DROP
+	var lone_y := plain_y - vertical_layer_separation * ORPHAN_TIER_DROP
 	if _cluster_orphans_expanded and not clustered.is_empty():
 		_layout_orphan_forest(clustered, base_x, start_z, cluster_y)
 		_centre_orphans_on(clustered, anchor)
@@ -2037,7 +2194,7 @@ func _place_proxies(proxied: Array) -> void:
 		var sources: Array = by_host[host2]
 		sources.sort()
 		var origin: Vector3 = _positions[host2]
-		var spread := float(sources.size() - 1) * CELL_SIZE * 0.5
+		var spread := float(sources.size() - 1) * node_min_separation * 0.5
 		for i in sources.size():
 			var orphan2 := String(sources[i])
 			var proxy := _proxy_path_for(orphan2)
@@ -2045,8 +2202,8 @@ func _place_proxies(proxied: Array) -> void:
 			# Reserved like everything else, so nothing is dropped on top of
 			# a proxy and the proxy is not dropped on top of anything.
 			_place_reserved(proxy, Vector3(
-				origin.x + float(i) * CELL_SIZE - spread,
-				origin.y - LAYER_HEIGHT * PROXY_DROP,
+				origin.x + float(i) * node_min_separation - spread,
+				origin.y - vertical_layer_separation * PROXY_DROP,
 				origin.z
 			))
 			_sizes[proxy] = PROXY_SIZE
@@ -2155,30 +2312,37 @@ func _layout_orphan_forest(paths: Array, base_x: float, z_start: float, base_y: 
 			# node beside it. A fixed CELL_SIZE is what left asset names
 			# running diagonally into each other.
 			var label_width := float(node3.get_file().length()) * LABEL_GLYPH_WIDTH + GROUP_CELL_PADDING
-			_block_size[node3] = Vector2(maxf(label_width, CELL_SIZE), CELL_SIZE)
+			_block_size[node3] = Vector2(
+				maxf(label_width, node_min_separation), node_min_separation
+			)
 		else:
 			var packed := _pack_shelves(kids)
 			_block_size[node3] = Vector2(
-				float(packed["width"]) + BLOCK_PADDING,
-				float(packed["depth"]) + BLOCK_PADDING
+				float(packed["width"]) + group_min_separation,
+				float(packed["depth"]) + group_min_separation
 			)
 
 	# Shelf-pack the trees themselves so a group with many clusters wraps
 	# instead of stretching off to the right forever.
-	var target_width := maxf(sqrt(float(paths.size())) * CELL_SIZE * 3.0, CELL_SIZE * 6.0)
+	var target_width := maxf(
+		sqrt(float(paths.size())) * node_min_separation * 3.0,
+		node_min_separation * 6.0
+	)
 	var cursor_x := base_x
 	var cursor_z := z_start
 	var row_depth := 0.0
 	for r3 in roots:
 		var root2: String = r3
-		var block: Vector2 = _block_size.get(root2, Vector2(CELL_SIZE, CELL_SIZE))
+		var block: Vector2 = _block_size.get(
+			root2, Vector2(node_min_separation, node_min_separation)
+		)
 		if cursor_x > base_x and (cursor_x - base_x) + block.x > target_width:
 			cursor_x = base_x
-			cursor_z += row_depth + BLOCK_PADDING
+			cursor_z += row_depth + group_min_separation
 			row_depth = 0.0
 		_positions[root2] = Vector3(cursor_x + block.x * 0.5, base_y, cursor_z + block.y * 0.5)
 		_place_orphan_descendants(tree_children, root2)
-		cursor_x += block.x + BLOCK_PADDING
+		cursor_x += block.x + group_min_separation
 		row_depth = maxf(row_depth, block.y)
 
 	for n2 in nodes:
@@ -2203,16 +2367,20 @@ func _place_orphan_descendants(children: Dictionary, root: String) -> void:
 		var origin: Vector3 = _positions[current]
 		var start_x := origin.x - float(packed["width"]) * 0.5
 		var z := origin.z - float(packed["depth"]) * 0.5
-		var y := origin.y - LAYER_HEIGHT
+		var y := origin.y - vertical_layer_separation
 		for r in packed["rows"]:
 			var row: Array = r
 			var row_depth := 0.0
 			for k in row:
-				row_depth = maxf(row_depth, Vector2(_block_size.get(k, Vector2(CELL_SIZE, CELL_SIZE))).y)
+				row_depth = maxf(row_depth, Vector2(_block_size.get(
+					k, Vector2(node_min_separation, node_min_separation)
+				)).y)
 			var x := start_x
 			for k in row:
 				var kid: String = k
-				var kb: Vector2 = _block_size.get(kid, Vector2(CELL_SIZE, CELL_SIZE))
+				var kb: Vector2 = _block_size.get(
+					kid, Vector2(node_min_separation, node_min_separation)
+				)
 				_positions[kid] = Vector3(x + kb.x * 0.5, y, z + row_depth * 0.5)
 				x += kb.x
 				stack.append(kid)
@@ -2244,6 +2412,10 @@ func _icon_range_for(path: String, related: Dictionary) -> float:
 
 
 func _color_for(path: String) -> Color:
+	if _hidden_member_of.has(path):
+		return _color_for(String(_hidden_member_of[path]))
+	if _hidden_group_members.has(path):
+		return TypeIcons.color_of(int(_hidden_group_kind.get(path, TypeIcons.Kind.OTHER)))
 	# A proxy is a stand-in, so it takes its whole appearance -- colour, icon
 	# and label -- from the file it represents.
 	if _proxy_of.has(path):
@@ -2309,6 +2481,12 @@ func _heat_color(path: String) -> Color:
 
 
 func _icon_for(path: String) -> Texture2D:
+	if _hidden_member_of.has(path):
+		return _icon_for(String(_hidden_member_of[path]))
+	if _hidden_group_members.has(path):
+		return _icon_textures.get(
+			int(_hidden_group_kind.get(path, TypeIcons.Kind.OTHER)), null
+		)
 	if _proxy_of.has(path):
 		return _icon_for(String(_proxy_of[path]))
 	if path == ORPHAN_HUB or path == CLUSTER_HUB:
@@ -2322,22 +2500,37 @@ func _icon_for(path: String) -> Texture2D:
 ## reframe=false keeps the camera exactly where it is. Toggles that only
 ## change what's drawn shouldn't teleport you away from whatever you were
 ## already looking at.
-func _rebuild_all(reframe: bool = true) -> void:
+func _rebuild_all(reframe: bool = true, animate: bool = false) -> void:
 	# Guarded because this is now a coroutine: a second call arriving mid-build
 	# would interleave with the first and corrupt the visuals.
 	if not _scan_done or _rebuilding:
 		return
 	_rebuilding = true
+	var previous_positions := _positions.duplicate()
 	var tree: Dictionary
 	if _layout_mode == LayoutMode.FOLDER:
 		tree = _build_folder_tree()
 	else:
 		_dir_nodes.clear()
 		tree = _build_dependency_tree()
+	tree = _compact_view_hidden_tree(tree)
 	_roots = (tree["roots"] as Array).duplicate()
 
 	_layout_grid(tree)
-	await _refresh_visuals()
+	if animate and not previous_positions.is_empty():
+		# Generate local hidden aggregates at their final positions before
+		# capturing the target. Existing nodes then start from where the user
+		# was looking and glide into the new layout.
+		_prepare_hidden_resource_groups()
+		var target_positions := _positions.duplicate()
+		for path_any in target_positions.keys():
+			var path := String(path_any)
+			if previous_positions.has(path):
+				_positions[path] = previous_positions[path]
+		await _refresh_visuals(false)
+		await _animate_layout_to(target_positions)
+	else:
+		await _refresh_visuals()
 	if reframe:
 		_frame_graph()
 	# Captured after layout so gathered nodes always have a true home to
@@ -2355,7 +2548,9 @@ func _rebuild_all(reframe: bool = true) -> void:
 	_rebuilding = false
 
 
-func _refresh_visuals() -> void:
+func _refresh_visuals(prepare_hidden_groups: bool = true) -> void:
+	if prepare_hidden_groups:
+		_prepare_hidden_resource_groups()
 	_isolate_set = _related_set()
 	_clear_visuals()
 	await _build_nodes()
@@ -2365,6 +2560,171 @@ func _refresh_visuals() -> void:
 	# toggle and the theme picker call this directly -- otherwise the overlay
 	# would be left showing a stale percentage forever.
 	_set_progress("")
+
+
+func _animate_layout_to(target_positions: Dictionary) -> void:
+	if _spacing_tween != null and _spacing_tween.is_valid():
+		_spacing_tween.kill()
+	var starts := _positions.duplicate()
+	_spacing_tween = create_tween()
+	_spacing_tween.set_trans(Tween.TRANS_CUBIC)
+	_spacing_tween.set_ease(Tween.EASE_IN_OUT)
+	_spacing_tween.tween_method(func(weight: float):
+		for path_any in target_positions.keys():
+			var path := String(path_any)
+			var target: Vector3 = target_positions[path]
+			var start: Vector3 = starts.get(path, target)
+			_positions[path] = start.lerp(target, weight)
+			_sync_node_visual(path)
+		_rebuild_edges()
+	, 0.0, 1.0, SPACING_ANIMATION_SECONDS)
+	await _spacing_tween.finished
+	_positions = target_positions
+	_rebuild_edges()
+
+
+func _prepare_hidden_resource_groups() -> void:
+	for old_group_any in _hidden_group_members.keys():
+		var old_group := String(old_group_any)
+		_release_reservation(old_group + "::expanded_block")
+		_positions.erase(old_group)
+		_sizes.erase(old_group)
+	for old_member_proxy_any in _hidden_member_of.keys():
+		var old_member_proxy := String(old_member_proxy_any)
+		_release_reservation(old_member_proxy)
+		_positions.erase(old_member_proxy)
+		_sizes.erase(old_member_proxy)
+	_hidden_group_members.clear()
+	_hidden_group_kind.clear()
+	_hidden_group_owner.clear()
+	_hidden_member_of.clear()
+	_hidden_member_group.clear()
+	if not _pack_hidden_resources:
+		return
+
+	# One aggregate per visible consumer and hidden kind. A scene using twelve
+	# textures gets its own Images node; another scene gets a different one.
+	# This preserves locality and prevents an unrelated project-wide mega-node.
+	for owner_any in _graph.keys():
+		var owner := String(owner_any)
+		if (
+			not _positions.has(owner)
+			or _is_configured_view_hidden(owner)
+			or owner.begins_with("::")
+		):
+			continue
+		for hidden_any in _graph.get(owner, []):
+			var hidden_path := String(hidden_any)
+			_register_hidden_reference_group(owner, hidden_path)
+
+	for owner_any in _orphan_graph.keys():
+		var owner := String(owner_any)
+		if (
+			not _positions.has(owner)
+			or _is_configured_view_hidden(owner)
+			or owner.begins_with("::")
+		):
+			continue
+		for hidden_any in _orphan_graph.get(owner, []):
+			_register_hidden_reference_group(owner, String(hidden_any))
+
+	for hidden_any in _orphan_notes.keys():
+		var hidden_path := String(hidden_any)
+		var owner := String(_orphan_notes[hidden_path])
+		if _positions.has(owner) and not _is_configured_view_hidden(owner):
+			_register_hidden_reference_group(owner, hidden_path)
+
+	var owner_group_counts := {}
+	for aggregate_any in _hidden_group_members.keys():
+		var aggregate := String(aggregate_any)
+		var members: Array = _hidden_group_members[aggregate]
+		if members.is_empty():
+			continue
+		var owner := String(_hidden_group_owner[aggregate])
+		if not _positions.has(owner):
+			continue
+		var local_index := int(owner_group_counts.get(owner, 0))
+		owner_group_counts[owner] = local_index + 1
+		var angle := float(local_index) * 1.15
+		var aggregate_distance := node_min_separation + group_min_separation
+		var offset := Vector3(
+			cos(angle) * aggregate_distance,
+			-vertical_layer_separation * 0.16,
+			sin(angle) * aggregate_distance
+		)
+		_positions[aggregate] = Vector3(_positions[owner]) + offset
+		_sizes[aggregate] = NODE_MIN_SIZE * 1.8
+
+		if not bool(_hidden_group_expanded.get(aggregate, false)):
+			continue
+		var columns := maxi(1, ceili(sqrt(float(members.size()))))
+		var longest_member_name := 0
+		for member_any in members:
+			longest_member_name = maxi(
+				longest_member_name, String(member_any).get_file().length()
+			)
+		var member_pitch := maxf(
+			group_member_min_separation,
+			float(longest_member_name) * LABEL_GLYPH_WIDTH + GROUP_CELL_PADDING
+		)
+		var row_count := ceili(float(members.size()) / float(columns))
+		var grid_width := float(columns - 1) * member_pitch
+		var grid_depth := float(row_count - 1) * member_pitch
+		# Prefer the centre of the resources' real, collision-aware layout.
+		# The whole revealed grid is then reserved as one block on its lower
+		# Y layer, so its members stay aligned instead of being pushed apart
+		# independently by collision repair.
+		var preferred_grid_centre := Vector3(_positions[aggregate])
+		var positioned_member_count := 0
+		preferred_grid_centre.x = 0.0
+		preferred_grid_centre.y = Vector3(_positions[aggregate]).y \
+			- vertical_layer_separation
+		preferred_grid_centre.z = 0.0
+		for positioned_member_any in members:
+			var positioned_member := String(positioned_member_any)
+			if not _positions.has(positioned_member):
+				continue
+			var positioned_at: Vector3 = _positions[positioned_member]
+			preferred_grid_centre.x += positioned_at.x
+			preferred_grid_centre.z += positioned_at.z
+			positioned_member_count += 1
+		if positioned_member_count > 0:
+			preferred_grid_centre.x /= float(positioned_member_count)
+			preferred_grid_centre.z /= float(positioned_member_count)
+		else:
+			preferred_grid_centre.x = Vector3(_positions[aggregate]).x
+			preferred_grid_centre.z = Vector3(_positions[aggregate]).z
+		var grid_centre := _reserve_space(
+			preferred_grid_centre,
+			Vector2(grid_width + member_pitch, grid_depth + member_pitch),
+			aggregate + "::expanded_block"
+		)
+		for member_index in members.size():
+			var member := String(members[member_index])
+			var member_proxy := "%s::member::%d" % [aggregate, member_index]
+			_hidden_member_of[member_proxy] = member
+			_hidden_member_group[member_proxy] = aggregate
+			var col := member_index % columns
+			var row := member_index / columns
+			var used_columns := mini(columns, members.size() - row * columns)
+			var x := (float(col) - float(used_columns - 1) * 0.5) * member_pitch
+			var z := (float(row) - float(row_count - 1) * 0.5) * member_pitch
+			_positions[member_proxy] = grid_centre + Vector3(x, 0.0, z)
+			_sizes[member_proxy] = float(_sizes.get(member, NODE_MIN_SIZE))
+
+
+func _register_hidden_reference_group(owner: String, hidden_path: String) -> void:
+	if not _is_configured_view_hidden(hidden_path):
+		return
+	var aggregate := _hidden_group_path_for(owner, hidden_path)
+	if not _hidden_group_members.has(aggregate):
+		_hidden_group_members[aggregate] = []
+		_hidden_group_kind[aggregate] = int(TypeIcons.kind_of(
+			_resolve_proxy(hidden_path)
+		))
+		_hidden_group_owner[aggregate] = owner
+	if not hidden_path in (_hidden_group_members[aggregate] as Array):
+		(_hidden_group_members[aggregate] as Array).append(hidden_path)
 
 
 func _clear_visuals() -> void:
@@ -2381,6 +2741,7 @@ func _clear_visuals() -> void:
 		child.queue_free()
 	_sprites.clear()
 	_labels.clear()
+	_group_reason_labels.clear()
 	_sphere_paths.clear()
 
 
@@ -2399,6 +2760,8 @@ func _update_status() -> void:
 	var visibility_note := ""
 	if not _view_hidden_kinds.is_empty() or not _view_hidden_extensions.is_empty():
 		visibility_note = "  |  view-hidden %d type(s)" % (_view_hidden_kinds.size() + _view_hidden_extensions.size())
+		if _pack_hidden_resources:
+			visibility_note += ", packed into %d aggregate(s)" % _hidden_group_members.size()
 	var reliability := "" if _godot_pass_used else "  |  [EXTERNAL PROJECT — reduced accuracy]"
 	if _deletion.is_granted():
 		reliability += "  |  DELETION ENABLED (%d moved to trash)" % _deletion.deleted_count()
@@ -2490,6 +2853,17 @@ func _build_nodes() -> void:
 				"Lone orphans" if path == ORPHAN_HUB else "Orphan clusters",
 				group.size(), "hide" if expanded else "show"
 			]
+		elif _hidden_group_members.has(path):
+			var aggregate_kind := int(_hidden_group_kind.get(path, TypeIcons.Kind.OTHER))
+			var aggregate_members: Array = _hidden_group_members.get(path, [])
+			var aggregate_expanded := bool(_hidden_group_expanded.get(path, false))
+			var aggregate_owner := String(_hidden_group_owner.get(path, ""))
+			label.text = "%s used by %s (%d) — click to %s" % [
+				TypeIcons.kind_label(aggregate_kind),
+				aggregate_owner.get_file(),
+				aggregate_members.size(),
+				"collapse" if aggregate_expanded else "expand",
+			]
 		else:
 			# Proxies carry the same name as the file they stand for.
 			label.text = _resolve_proxy(path).get_file() + ("/" if _dir_nodes.has(path) else "")
@@ -2518,6 +2892,7 @@ func _build_nodes() -> void:
 		_build_sphere_multimesh()
 	_build_orphan_hub()
 	_build_embed_markers()
+	_build_group_labels()
 
 
 ## A small purple dot above any live file that embeds a standalone resource's
@@ -2568,6 +2943,56 @@ func _build_embed_markers() -> void:
 			marker.queue_free()
 			continue
 		_visuals_root.add_child(marker)
+
+
+## Labels the layout's deliberate groups with both their name and the evidence
+## used to form them. This turns an otherwise implicit spatial hint into an
+## inspectable statement rather than asking the user to guess why files moved.
+func _build_group_labels() -> void:
+	if not _show_group_reasoning:
+		return
+	for annotation_any in _group_annotations.values():
+		var annotation: Dictionary = annotation_any
+		var shown_members: Array = []
+		for member_any in annotation.get("members", []):
+			var member := String(member_any)
+			if _positions.has(member) and _is_displayed(member):
+				shown_members.append(member)
+		if shown_members.size() < 2:
+			continue
+
+		var centre := Vector3.ZERO
+		var highest_y := -INF
+		for member_any in shown_members:
+			var member := String(member_any)
+			var position: Vector3 = _positions[member]
+			centre += position
+			highest_y = maxf(highest_y, position.y)
+		centre /= float(shown_members.size())
+
+		var label := Label3D.new()
+		label.text = "%s (%d)\n%s" % [
+			String(annotation.get("title", "Related files")),
+			shown_members.size(),
+			String(annotation.get("reason", "grouped by layout evidence")),
+		]
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		label.font_size = LABEL_FONT_SIZE
+		label.pixel_size = LABEL_PIXEL_SIZE * 0.78
+		label.modulate = Color(0.65, 0.88, 1.0)
+		label.outline_size = LABEL_OUTLINE_SIZE
+		label.outline_modulate = Color.BLACK if _theme_is_dark else Color.WHITE
+		label.alpha_cut = Label3D.ALPHA_CUT_DISCARD
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.position = Vector3(
+			centre.x,
+			highest_y + vertical_layer_separation * 0.34,
+			centre.z
+		)
+		label.visibility_range_end = LABEL_VIEW_DISTANCE * 1.35
+		label.visibility_range_end_margin = 10.0
+		_visuals_root.add_child(label)
+		_group_reason_labels.append(label)
 
 
 
@@ -2653,6 +3078,7 @@ func _rebuild_edges() -> void:
 		add_child(_edge_mesh_instance)
 
 	var related := _related_set()
+	var drawn_edges := {}
 	var im := ImmediateMesh.new()
 	im.surface_begin(Mesh.PRIMITIVE_LINES)
 
@@ -2671,19 +3097,37 @@ func _rebuild_edges() -> void:
 			var parent_dir := String(child_path).get_base_dir()
 			if parent_dir == child_path or not _positions.has(parent_dir):
 				continue
-			if not _is_displayed(child_path) or not _is_displayed(parent_dir):
+			var folder_from := _edge_endpoint(parent_dir)
+			var folder_to := _edge_endpoint(child_path)
+			if (
+				not _positions.has(folder_from)
+				or not _positions.has(folder_to)
+				or not _is_displayed(folder_from)
+				or not _is_displayed(folder_to)
+				or folder_from == folder_to
+			):
 				continue
-			_add_edge(im, parent_dir, child_path, _theme_out, related)
+			_add_deduped_edge(
+				im, folder_from, folder_to, _theme_out, related, drawn_edges
+			)
 
 	for key in _graph.keys():
 		var parent: String = key
-		if not _positions.has(parent) or not _is_displayed(parent):
+		var shown_parent := _edge_endpoint(parent)
+		if not _positions.has(shown_parent) or not _is_displayed(shown_parent):
 			continue
 		for r in _graph[parent]:
 			var child: String = r
-			if not _positions.has(child) or not _is_displayed(child):
+			var shown_child := _edge_endpoint(child, parent)
+			if (
+				not _positions.has(shown_child)
+				or not _is_displayed(shown_child)
+				or shown_parent == shown_child
+			):
 				continue
-			_add_edge(im, parent, child, _theme_out, related)
+			_add_deduped_edge(
+				im, shown_parent, shown_child, _theme_out, related, drawn_edges
+			)
 
 	# Orphan-to-orphan dependencies. Dead code still has real internal
 	# structure, and drawing it is what makes a dead cluster legible as a
@@ -2696,21 +3140,64 @@ func _rebuild_edges() -> void:
 		orphan_sources = _orphan_graph.keys()
 	for key in orphan_sources:
 		var orphan_src: String = key
-		if not _positions.has(orphan_src) or not _is_displayed(orphan_src):
+		var shown_orphan_src := _edge_endpoint(orphan_src)
+		if not _positions.has(shown_orphan_src) or not _is_displayed(shown_orphan_src):
 			continue
 		for r in _orphan_graph[orphan_src]:
 			var orphan_dst: String = r
-			if not _positions.has(orphan_dst) or not _is_displayed(orphan_dst):
+			var shown_orphan_dst := _edge_endpoint(orphan_dst, orphan_src)
+			if (
+				not _positions.has(shown_orphan_dst)
+				or not _is_displayed(shown_orphan_dst)
+				or shown_orphan_src == shown_orphan_dst
+			):
 				continue
 			if _selected == orphan_src or _selected == orphan_dst:
 				continue   # drawn weighted by _draw_selection_links instead
-			_add_edge(im, orphan_src, orphan_dst, _theme_dangling, related)
+			_add_deduped_edge(
+				im, shown_orphan_src, shown_orphan_dst,
+				_theme_dangling, related, drawn_edges
+			)
+
+	# Inheritance is semantic, not just another file reference. Draw it over
+	# the ordinary dependency strand with its own colour and an arrowhead
+	# pointing from the child class toward the base class.
+	for child_any in _parent_of.keys():
+		var child := _edge_endpoint(String(child_any))
+		var base := _edge_endpoint(String(_parent_of[child_any]), String(child_any))
+		if (
+			child == ""
+			or base == ""
+			or child == base
+			or not _positions.has(child)
+			or not _positions.has(base)
+			or not _is_displayed(child)
+			or not _is_displayed(base)
+		):
+			continue
+		_add_inheritance_edge(im, child, base, related)
 
 	# Folder coupling and inlined-copy links are noise during a trace: only
 	# the chain being traced should be visible.
 	if _analysis_mode != AnalysisMode.PATHS:
 		_draw_folder_links(im)
 		_draw_embed_links(im)
+
+	# Expanded hidden members are deliberately not real dependency endpoints:
+	# the dependency terminates at the aggregate dummy. These short branch
+	# lines express membership, making it obvious which revealed resources
+	# were expanded from that dummy without duplicating dependency edges.
+	for member_proxy_any in _hidden_member_group.keys():
+		var member_proxy := String(member_proxy_any)
+		var aggregate := String(_hidden_member_group[member_proxy])
+		if (
+			not _positions.has(aggregate)
+			or not _positions.has(member_proxy)
+			or not _is_displayed(aggregate)
+			or not _is_displayed(member_proxy)
+		):
+			continue
+		_add_hidden_membership_edge(im, aggregate, member_proxy, related)
 
 	var tubes: Array = []
 	_draw_selection_links(im, tubes)
@@ -2726,6 +3213,97 @@ func _rebuild_edges() -> void:
 		im.surface_end()
 
 	_edge_mesh_instance.mesh = im
+
+
+func _add_inheritance_edge(
+	im: ImmediateMesh, child: String, base: String, related: Dictionary
+) -> void:
+	var alpha := idle_connection_alpha
+	if _selected == child or _selected == base:
+		alpha = selected_connection_alpha
+	elif _selected != "" and not (related.has(child) and related.has(base)):
+		alpha *= DIM_ALPHA
+	var colour := _connection_alpha(_theme_inheritance, alpha)
+	var from: Vector3 = _positions[child]
+	var tip: Vector3 = _positions[base]
+	im.surface_set_color(colour)
+	im.surface_add_vertex(from)
+	im.surface_set_color(colour)
+	im.surface_add_vertex(tip)
+
+	var direction := tip - from
+	var length := direction.length()
+	if length < 0.001:
+		return
+	direction /= length
+	# Keep both cues clear of the node icons. Fractions alone put arrows
+	# inside large nodes on short links, while a fixed distance puts them
+	# near the middle of very long links; this bounded endpoint clearance
+	# handles both cases.
+	var endpoint_clearance := maxf(
+		float(_sizes.get(child, NODE_MIN_SIZE)),
+		float(_sizes.get(base, NODE_MIN_SIZE))
+	) + INHERITANCE_ARROW_SIZE * 1.15
+	var endpoint_t := clampf(endpoint_clearance / length, 0.12, 0.35)
+	var arrow_size := INHERITANCE_ARROW_SIZE * (
+		1.25 if _selected == child or _selected == base else 1.0
+	)
+	_add_inheritance_arrowhead(
+		im, from.lerp(tip, endpoint_t), direction, colour, arrow_size
+	)
+	_add_inheritance_arrowhead(
+		im, from.lerp(tip, 1.0 - endpoint_t), direction, colour, arrow_size
+	)
+
+
+func _add_inheritance_arrowhead(
+	im: ImmediateMesh, point: Vector3, direction: Vector3,
+	colour: Color, arrow_size: float
+) -> void:
+	var backward := -direction.normalized()
+	var side := _perpendicular(backward)
+	var up := side.cross(backward).normalized()
+	var arrow_base := point + backward * arrow_size
+	var wing := arrow_size * 0.52
+	for offset in [side * wing, -side * wing, up * wing, -up * wing]:
+		im.surface_set_color(colour)
+		im.surface_add_vertex(point)
+		im.surface_set_color(colour)
+		im.surface_add_vertex(arrow_base + offset)
+
+
+func _add_hidden_membership_edge(
+	im: ImmediateMesh, aggregate: String, member_proxy: String, related: Dictionary
+) -> void:
+	var alpha := idle_connection_alpha
+	if _selected == aggregate or _selected == member_proxy:
+		alpha = selected_connection_alpha
+	elif _selected != "" and not (
+		related.has(aggregate) and related.has(member_proxy)
+	):
+		alpha *= DIM_ALPHA
+	var colour := _connection_alpha(_theme_dangling, alpha)
+	im.surface_set_color(colour)
+	im.surface_add_vertex(_positions[aggregate])
+	im.surface_set_color(colour)
+	im.surface_add_vertex(_positions[member_proxy])
+
+
+func _add_deduped_edge(
+	im: ImmediateMesh,
+	from_path: String,
+	to_path: String,
+	colour: Color,
+	related: Dictionary,
+	drawn: Dictionary
+) -> void:
+	if from_path == to_path:
+		return
+	var key := from_path + "|" + to_path
+	if drawn.has(key):
+		return
+	drawn[key] = true
+	_add_edge(im, from_path, to_path, colour, related)
 
 
 ## Context menu for a node in the 3D view. Reachable by right-click, or by
@@ -2745,7 +3323,21 @@ func _is_deletable(path: String) -> bool:
 
 
 func _open_node_menu(screen_point: Vector2) -> void:
-	var hit := _resolve_proxy(_pick_node_at(screen_point))
+	var hit := _pick_node_at(screen_point)
+	if _hidden_group_members.has(hit):
+		_menu_target = hit
+		_release_mouse()
+		_node_menu.clear()
+		_node_menu.add_item(
+			"Collapse represented files" if bool(_hidden_group_expanded.get(hit, false))
+			else "Expand represented files",
+			16
+		)
+		_node_menu.position = Vector2i(get_viewport().get_mouse_position()) + Vector2i(4, 4)
+		_node_menu.reset_size()
+		_node_menu.popup()
+		return
+	hit = _resolve_proxy(hit)
 	if hit == "" or hit == ORPHAN_HUB or hit == CLUSTER_HUB:
 		# Right-clicking empty space still needs to reach the overlay
 		# controls: otherwise clearing an analysis means hunting for a node
@@ -2863,6 +3455,8 @@ func _on_node_menu(id: int) -> void:
 			_request_delete_permission()
 		15:
 			_open_move_refactor(_menu_target)
+		16:
+			await _toggle_hidden_group(_menu_target)
 		4:
 			_highlight_path(_menu_target)
 			_set_analysis_mode(AnalysisMode.PATHS)
@@ -2971,11 +3565,34 @@ func _draw_folder_links(im: ImmediateMesh) -> void:
 ## and appears when the "inlined copies" option is on, or whenever either end
 ## of it is selected -- because at that point it is the whole story.
 func _draw_embed_links(im: ImmediateMesh) -> void:
+	var drawn_hidden_pairs := {}
 	for key in _orphan_notes.keys():
 		var orphan: String = key
-		if not _positions.has(orphan) or not _is_displayed(orphan):
+		if not _positions.has(orphan):
 			continue
 		var host := String(_orphan_notes[orphan])
+		if _is_configured_view_hidden(orphan):
+			if not _pack_hidden_resources:
+				continue
+			var shown_orphan := _edge_endpoint(orphan, host)
+			var shown_host := _edge_endpoint(host)
+			var hidden_pair := shown_host + "|" + shown_orphan
+			if (
+				shown_host != shown_orphan
+				and _positions.has(shown_host)
+				and _positions.has(shown_orphan)
+				and _is_displayed(shown_host)
+				and _is_displayed(shown_orphan)
+				and not drawn_hidden_pairs.has(hidden_pair)
+			):
+				drawn_hidden_pairs[hidden_pair] = true
+				_add_dashed_line(
+					im, _positions[shown_host], _positions[shown_orphan],
+					_connection_alpha(_theme_inline, idle_connection_alpha)
+				)
+			continue
+		if not _is_displayed(orphan):
+			continue
 		# Also relevant when the selection is the ghost, since that stands in
 		# for the orphan.
 		var relevant := (
@@ -2991,7 +3608,7 @@ func _draw_embed_links(im: ImmediateMesh) -> void:
 		)
 
 		var proxy := _proxy_path_for(orphan)
-		if _positions.has(proxy):
+		if _positions.has(proxy) and _is_displayed(proxy):
 			# Matches the node colour, so the pair reads as one unit.
 			var link_alpha := (
 				selected_connection_alpha if selected_relation else idle_connection_alpha
@@ -3003,10 +3620,11 @@ func _draw_embed_links(im: ImmediateMesh) -> void:
 			# they are one and the same thing.
 			if _positions.has(host) and _is_displayed(host):
 				_add_dashed_line(im, _positions[host], _positions[proxy], link_colour)
-			im.surface_set_color(link_colour)
-			im.surface_add_vertex(_positions[proxy])
-			im.surface_set_color(link_colour)
-			im.surface_add_vertex(_positions[orphan])
+			if _is_displayed(orphan):
+				im.surface_set_color(link_colour)
+				im.surface_add_vertex(_positions[proxy])
+				im.surface_set_color(link_colour)
+				im.surface_add_vertex(_positions[orphan])
 			continue
 
 		# No proxy: tie it to the cube and link straight to its host.
@@ -3082,7 +3700,7 @@ func _add_dashed_line(im: ImmediateMesh, from_point: Vector3, to_point: Vector3,
 func _add_block_outline(im: ImmediateMesh, dir_path: String, related: Dictionary) -> void:
 	var centre: Vector3 = _positions[dir_path]
 	var b: Vector2 = _block_size[dir_path]
-	var y := centre.y - LAYER_HEIGHT * 0.5
+	var y := centre.y - vertical_layer_separation * 0.5
 	var hw := b.x * 0.5
 	var hd := b.y * 0.5
 	var col := COLOR_BLOCK
@@ -3235,7 +3853,11 @@ func _incoming_weighted() -> Array:
 ## the centre line, so an A->B and B->A relationship reads as a two-lane
 ## bundle instead of two overlapping bundles fighting for the same pixels.
 func _draw_selection_links(im: ImmediateMesh, tubes: Array) -> void:
-	if _selected == "" or not _positions.has(_selected):
+	if (
+		_selected == ""
+		or not _positions.has(_selected)
+		or not _is_displayed(_selected)
+	):
 		return
 	# Suppressed while tracing: the question there is "where does execution
 	# reach this from", and the selection's own weighted strands radiate in
@@ -3246,19 +3868,34 @@ func _draw_selection_links(im: ImmediateMesh, tubes: Array) -> void:
 	# Collect each neighbour once, with the weight in both directions.
 	var neighbours := {}
 	for r in _refs_of(_selected):
-		var target: String = r
-		if not _positions.has(target):
+		var target := _edge_endpoint(String(r), _selected)
+		if (
+			target == _selected
+			or not _positions.has(target)
+			or not _is_displayed(target)
+		):
 			continue
 		if not neighbours.has(target):
 			neighbours[target] = {"out": 0, "in": 0}
-		neighbours[target]["out"] = maxi(1, _link_weight(_selected, target))
+		neighbours[target]["out"] = maxi(
+			int(neighbours[target]["out"]),
+			maxi(1, _link_weight(_selected, String(r)))
+		)
 	for r in _referrers_of(_selected):
-		var source: String = r
-		if source == _selected or not _positions.has(source):
+		var original_source := String(r)
+		var source := _edge_endpoint(original_source)
+		if (
+			source == _selected
+			or not _positions.has(source)
+			or not _is_displayed(source)
+		):
 			continue
 		if not neighbours.has(source):
 			neighbours[source] = {"out": 0, "in": 0}
-		neighbours[source]["in"] = maxi(1, _link_weight(source, _selected))
+		neighbours[source]["in"] = maxi(
+			int(neighbours[source]["in"]),
+			maxi(1, _link_weight(original_source, _selected))
+		)
 
 	var origin: Vector3 = _positions[_selected]
 	for key2 in neighbours.keys():
@@ -3427,10 +4064,25 @@ func _related_set() -> Dictionary:
 	if _selected == "":
 		return related
 	related[_selected] = true
+	var selected_actual := _resolve_proxy(_selected)
+	if _parent_of.has(selected_actual):
+		var base_actual := String(_parent_of[selected_actual])
+		related[base_actual] = true
+		var shown_base := _edge_endpoint(base_actual, selected_actual)
+		if shown_base != "":
+			related[shown_base] = true
 	for r in _refs_of(_selected):
-		related[String(r)] = true
+		var referenced := String(r)
+		related[referenced] = true
+		var shown_reference := _edge_endpoint(referenced, _selected)
+		if shown_reference != "":
+			related[shown_reference] = true
 	for r in _referrers_of(_selected):
-		related[String(r)] = true
+		var referrer := String(r)
+		related[referrer] = true
+		var shown_referrer := _edge_endpoint(referrer)
+		if shown_referrer != "":
+			related[shown_referrer] = true
 
 	# A proxied file and its stand-in are the same thing, so selecting either
 	# lights both. The host is deliberately NOT included: it merely contains a
@@ -3477,10 +4129,18 @@ func _apply_selection_visuals() -> void:
 	# leave this stale and starve the neighbourhood of its minimum size.
 	_isolate_set = related
 	var dimming := _selected != ""
+	var selected_base := ""
+	var selected_actual := _resolve_proxy(_selected)
+	if _parent_of.has(selected_actual):
+		selected_base = _edge_endpoint(
+			String(_parent_of[selected_actual]), selected_actual
+		)
 
 	for key in _sprites.keys():
 		var path: String = key
 		var col := _color_for(path)
+		if path == selected_base:
+			col = _theme_inheritance
 		# A proxy shares its file's lit/dim state, since they are one node
 		# shown twice.
 		if dimming and not related.has(path) and not related.has(_resolve_proxy(path)):
@@ -3492,6 +4152,8 @@ func _apply_selection_visuals() -> void:
 	for key in _labels.keys():
 		var path2: String = key
 		var col2 := _label_color(_color_for(path2))
+		if path2 == selected_base:
+			col2 = _label_color(_theme_inheritance)
 		if dimming and not related.has(path2) and not related.has(_resolve_proxy(path2)):
 			# Faded toward the background rather than made transparent:
 			# with ALPHA_CUT_DISCARD an alpha fade would clip the text away
@@ -3511,6 +4173,8 @@ func _apply_selection_visuals() -> void:
 		for i in _sphere_paths.size():
 			var path3: String = _sphere_paths[i]
 			var col3 := _color_for(path3)
+			if path3 == selected_base:
+				col3 = _theme_inheritance
 			if dimming and not related.has(path3):
 				col3.a = DIM_ALPHA
 			mm.set_instance_color(i, col3)
@@ -3574,7 +4238,15 @@ func _load_exported_icon(path: String) -> Texture2D:
 
 
 func _toolbar_icon(key: String) -> Texture2D:
-	return _load_exported_icon(TypeIcons.special_icon_path("toolbar_" + key))
+	var texture := _load_exported_icon(TypeIcons.special_icon_path("toolbar_" + key))
+	# Existing installations may not have exported the newly added pack
+	# icons yet. The group state icons communicate the same collapse/expand
+	# concept and keep the button visually useful until the next export.
+	if texture == null and key.begins_with("pack_hidden"):
+		texture = _load_exported_icon(TypeIcons.special_icon_path(
+			"toolbar_" + key.replace("pack_hidden", "group")
+		))
+	return texture
 
 
 func _apply_toolbar_icons() -> void:
@@ -3652,10 +4324,16 @@ func _sync_toolbar_buttons() -> void:
 	_set_toolbar_state_icon("pull", "on" if _relax_layout else "off")
 	_set_toolbar_pressed("group", _group_affinity)
 	_set_toolbar_state_icon("group", "on" if _group_affinity else "off")
+	_set_toolbar_pressed("group_reasoning", _show_group_reasoning)
+	_set_toolbar_state_icon(
+		"group_reasoning", "on" if _show_group_reasoning else "off"
+	)
 	_set_toolbar_pressed("labels", _min_label_global)
 	_set_toolbar_state_icon("labels", "on" if _min_label_global else "off")
 	_set_toolbar_pressed("label_cull", _label_distance_culling)
 	_set_toolbar_state_icon("label_cull", "on" if _label_distance_culling else "off")
+	_set_toolbar_pressed("pack_hidden", _pack_hidden_resources)
+	_set_toolbar_state_icon("pack_hidden", "on" if _pack_hidden_resources else "off")
 	var files_visible := _left_panel != null and _left_panel.visible
 	_set_toolbar_pressed("files", files_visible)
 	_set_toolbar_state_icon("files", "on" if files_visible else "off")
@@ -3730,6 +4408,8 @@ func _refresh_toolbar_help() -> void:
 	_add_toolbar_help_entry("connections", "T", "Cycle flat strands, cable strands, and weighted tubes.")
 	_add_toolbar_help_entry("pull", "Y", "Pull weakly linked files toward the files that reference them.")
 	_add_toolbar_help_entry("group", "J", "Group files that share a naming convention.")
+	_add_toolbar_help_entry("group_reasoning", "", "Show or hide the 3D labels explaining why files were grouped.")
+	_add_toolbar_help_entry("spacing", "", "Set horizontal node/group spacing and vertical layer separation. Relayout is animated after dragging.")
 
 	_add_toolbar_help_heading("Focus and readability")
 	_add_toolbar_help_entry("isolate", "O", "Show only the selection and its direct neighbours.")
@@ -3742,6 +4422,7 @@ func _refresh_toolbar_help() -> void:
 	_add_toolbar_help_heading("Files and panels")
 	_add_toolbar_help_entry("filter", "K", "Remove file types from analysis and recompute the layout.")
 	_add_toolbar_help_entry("visibility", "", "Hide file types visually while keeping the full computed graph.")
+	_add_toolbar_help_entry("pack_hidden", "", "Replace each hidden file kind with one expandable aggregate node. Connections terminate at the aggregate.")
 	_add_toolbar_help_entry("files", "F1", "Show or hide the Project Files panel.")
 	_add_toolbar_help_entry("info", "F2", "Show or hide the Selection panel.")
 	_add_toolbar_help_entry("panels", "F3", "Scan another Godot project.")
@@ -3801,10 +4482,13 @@ func _build_toolbar() -> void:
 		"gather": ["Gather", "Gather direct relations around selection (R)", _send_toolbar_shortcut.bind(KEY_R)],
 		"pull": ["Pull", "Pull nodes toward their references (Y)", _send_toolbar_shortcut.bind(KEY_Y)],
 		"group": ["Group", "Group related naming families (J)", _send_toolbar_shortcut.bind(KEY_J)],
+		"group_reasoning": ["GroupReasoning", "Show or hide grouping explanations", _toggle_group_reasoning],
 		"labels": ["Labels", "Minimum size for all labels (M)", _send_toolbar_shortcut.bind(KEY_M)],
 		"label_cull": ["LabelCull", "Hide distant labels (L)", _send_toolbar_shortcut.bind(KEY_L)],
 		"filter": ["Filter", "Remove types from analysis and layout (K)", _open_filter_window],
 		"visibility": ["Visibility", "Hide types visually without changing analysis", _open_visibility_window],
+		"pack_hidden": ["PackHidden", "Aggregate hidden file kinds into expandable proxy nodes", _toggle_pack_hidden_resources],
+		"spacing": ["Spacing", "Adjust minimum node and group spacing", _open_spacing_popup],
 		"home": ["Home", "Return camera to its starting view (F / Home)", _go_home],
 		"clear": ["Clear", "Clear path/change-impact analysis (C)", _send_toolbar_shortcut.bind(KEY_C)],
 		"files": ["Files", "Show or hide Project Files panel (F1)", _send_toolbar_shortcut.bind(KEY_F1)],
@@ -3820,8 +4504,8 @@ func _build_toolbar() -> void:
 		button.expand_icon = true
 		button.flat = true
 		button.custom_minimum_size = Vector2(24, 0)
-		if not toolbar_show_labels:
-			button.text = ""
+		# Names stay visible when icons are applied. Icons communicate state;
+		# the text communicates the action and must not disappear.
 		button.pressed.connect(binding[2] as Callable)
 		_toolbar_buttons[id] = button
 
@@ -3830,11 +4514,121 @@ func _build_toolbar() -> void:
 	_toolbar_help.expand_icon = true
 	_toolbar_help.flat = true
 	_toolbar_help.custom_minimum_size = Vector2(24, 0)
-	if not toolbar_show_labels:
-		_toolbar_help.text = ""
 	_build_toolbar_help()
 	_apply_toolbar_icons()
 	_sync_toolbar_buttons()
+
+
+func _open_spacing_popup() -> void:
+	if _spacing_popup == null:
+		_build_spacing_popup()
+	_sync_spacing_controls()
+	_spacing_popup.popup_centered(Vector2i(530, 290))
+
+
+func _build_spacing_popup() -> void:
+	_spacing_popup = PopupPanel.new()
+	_spacing_popup.name = "SpacingPopup"
+	add_child(_spacing_popup)
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 18)
+	margin.add_theme_constant_override("margin_right", 18)
+	margin.add_theme_constant_override("margin_top", 14)
+	margin.add_theme_constant_override("margin_bottom", 14)
+	_spacing_popup.add_child(margin)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 10)
+	margin.add_child(column)
+	var heading := Label.new()
+	heading.text = "Layout spacing"
+	heading.add_theme_font_size_override("font_size", 19)
+	column.add_child(heading)
+	var hint := Label.new()
+	hint.text = "Changes settle briefly, then nodes animate to the recomputed layout."
+	column.add_child(hint)
+	_add_spacing_slider(
+		column, "node", "Between ordinary nodes", node_min_separation, 1.0, 16.0
+	)
+	_add_spacing_slider(
+		column, "member", "Inside the same group", group_member_min_separation, 1.0, 20.0
+	)
+	_add_spacing_slider(
+		column, "group", "Between separate groups", group_min_separation, 0.5, 24.0
+	)
+	_add_spacing_slider(
+		column, "vertical", "Vertical separation (Y axis)",
+		vertical_layer_separation, 2.0, 30.0
+	)
+
+
+func _add_spacing_slider(
+	parent: VBoxContainer, key: String, title: String, current: float,
+	minimum: float, maximum: float
+) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	parent.add_child(row)
+	var label := Label.new()
+	label.text = title
+	label.custom_minimum_size.x = 190.0
+	row.add_child(label)
+	var slider := HSlider.new()
+	slider.name = key
+	slider.min_value = minimum
+	slider.max_value = maximum
+	slider.step = 0.25
+	slider.value = current
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slider.custom_minimum_size.x = 230.0
+	slider.value_changed.connect(_on_spacing_changed.bind(key))
+	row.add_child(slider)
+	var value_label := Label.new()
+	value_label.custom_minimum_size.x = 46.0
+	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	row.add_child(value_label)
+	_spacing_value_labels[key] = {"slider": slider, "label": value_label}
+
+
+func _sync_spacing_controls() -> void:
+	var values := {
+		"node": node_min_separation,
+		"member": group_member_min_separation,
+		"group": group_min_separation,
+		"vertical": vertical_layer_separation,
+	}
+	for key_any in values:
+		var key := String(key_any)
+		if not _spacing_value_labels.has(key):
+			continue
+		var controls: Dictionary = _spacing_value_labels[key]
+		(controls["slider"] as HSlider).set_value_no_signal(float(values[key]))
+		(controls["label"] as Label).text = "%.2f" % float(values[key])
+
+
+func _on_spacing_changed(value: float, key: String) -> void:
+	match key:
+		"node":
+			node_min_separation = value
+		"member":
+			group_member_min_separation = value
+		"group":
+			group_min_separation = value
+		"vertical":
+			vertical_layer_separation = value
+	if _spacing_value_labels.has(key):
+		var controls: Dictionary = _spacing_value_labels[key]
+		(controls["label"] as Label).text = "%.2f" % value
+	_save_settings()
+	_spacing_change_serial += 1
+	var serial := _spacing_change_serial
+	_relayout_after_spacing_pause(serial)
+
+
+func _relayout_after_spacing_pause(serial: int) -> void:
+	await get_tree().create_timer(SPACING_RELAYOUT_DELAY).timeout
+	if serial != _spacing_change_serial or _rebuilding:
+		return
+	await _rebuild_all(false, true)
 
 
 func _build_ui() -> void:
@@ -4042,7 +4836,7 @@ func _populate_file_tree() -> void:
 		var path: String = p
 		if path == ORPHAN_HUB or path == CLUSTER_HUB or path.begins_with(PROXY_PREFIX):
 			continue
-		if _is_view_hidden(path):
+		if _is_configured_view_hidden(path):
 			continue
 		if _filter_text != "" and not path.get_file().to_lower().contains(_filter_text):
 			continue
@@ -4527,6 +5321,7 @@ func _connection_colour_entries() -> Array:
 		"in": ["Line IN", "Files that reference the selected file."],
 		"dangling": ["Dangling resources", "Connections inside unreachable code."],
 		"inline": ["Inlined-copy link", "Joins a file to the copy of its code."],
+		"inheritance": ["Inheritance", "Arrow from a child class to its base class."],
 		"path": ["Reachability path", "A chain from an entry point."],
 		"impact": ["Change impact", "Files affected by the selection."],
 		"pulse": ["Trace pulse", "The dot that walks each traced chain."],
@@ -4789,11 +5584,68 @@ func _on_visibility_changed(hidden_kinds: Array, hidden_extensions: Array, custo
 	if _selected != "" and _is_view_hidden(_selected):
 		_selected = ""
 		_update_info()
+	# Visibility does not change analysis, but it does change placement:
+	# rebuild from the full computed graph with hidden nodes omitted from the
+	# layout tree, then animate visible nodes into the reclaimed space.
+	await _rebuild_all(false, true)
+	_save_settings()
+	_show_toast("Visibility updated — %d kind(s), %d extension(s) hidden; layout compacted" % [
+		_view_hidden_kinds.size(), _view_hidden_extensions.size()
+	])
+
+
+func _toggle_pack_hidden_resources() -> void:
+	_pack_hidden_resources = not _pack_hidden_resources
+	if not _pack_hidden_resources:
+		_hidden_group_expanded.clear()
+	_selected = ""
+	_update_info()
 	await _refresh_visuals()
 	_populate_file_tree()
+	_sync_toolbar_buttons()
 	_save_settings()
-	_show_toast("Visibility updated — %d kind(s), %d extension(s) hidden; layout unchanged" % [
-		_view_hidden_kinds.size(), _view_hidden_extensions.size()
+	_show_toast(
+		"Hidden resource aggregates: %s%s" % [
+			"ON" if _pack_hidden_resources else "OFF",
+			"  (%d group(s))" % _hidden_group_members.size()
+				if _pack_hidden_resources else "",
+		]
+	)
+
+
+func _toggle_group_reasoning() -> void:
+	_show_group_reasoning = not _show_group_reasoning
+	if _show_group_reasoning:
+		_build_group_labels()
+	else:
+		for label in _group_reason_labels:
+			if is_instance_valid(label):
+				label.queue_free()
+		_group_reason_labels.clear()
+	_sync_toolbar_buttons()
+	_save_settings()
+	_show_toast(
+		"Grouping explanations: %s"
+		% ("shown" if _show_group_reasoning else "hidden")
+	)
+
+
+func _toggle_hidden_group(aggregate: String) -> void:
+	if not _hidden_group_members.has(aggregate):
+		return
+	_hidden_group_expanded[aggregate] = not bool(
+		_hidden_group_expanded.get(aggregate, false)
+	)
+	_selected = ""
+	_update_info()
+	await _refresh_visuals()
+	_show_toast("%s used by %s: %s (%d file(s), connections remain packed)" % [
+		TypeIcons.kind_label(int(_hidden_group_kind.get(
+			aggregate, TypeIcons.Kind.OTHER
+		))),
+		String(_hidden_group_owner.get(aggregate, "")).get_file(),
+		"expanded" if bool(_hidden_group_expanded[aggregate]) else "collapsed",
+		(_hidden_group_members.get(aggregate, []) as Array).size(),
 	])
 
 
@@ -4812,6 +5664,7 @@ func _save_settings() -> void:
 		"custom_extensions": _custom_extensions,
 		"view_hidden_kinds": _view_hidden_kinds.keys(),
 		"view_hidden_extensions": _view_hidden_extensions.keys(),
+		"pack_hidden_resources": _pack_hidden_resources,
 		"theme": _theme_id,
 		"connection_theme": _connection_theme_id,
 		"idle_connection_alpha": idle_connection_alpha,
@@ -4819,6 +5672,11 @@ func _save_settings() -> void:
 		"colour_overrides": _overrides.to_flat(),
 		"gather_relations": _gather_enabled,
 		"show_embed_links": _show_embed_links,
+		"show_group_reasoning": _show_group_reasoning,
+		"node_min_separation": node_min_separation,
+		"group_member_min_separation": group_member_min_separation,
+		"group_min_separation": group_min_separation,
+		"vertical_layer_separation": vertical_layer_separation,
 	})
 	if problem != "":
 		push_warning("Dependency Atlas: " + problem)
@@ -4844,8 +5702,23 @@ func _load_settings() -> void:
 	_view_hidden_extensions.clear()
 	for e in settings.get("view_hidden_extensions", []):
 		_view_hidden_extensions[String(e)] = true
+	_pack_hidden_resources = bool(settings.get("pack_hidden_resources", false))
 	_gather_enabled = bool(settings.get("gather_relations", false))
 	_show_embed_links = bool(settings.get("show_embed_links", true))
+	_show_group_reasoning = bool(settings.get("show_group_reasoning", true))
+	node_min_separation = clampf(float(settings.get(
+		"node_min_separation", OFConfig.DEFAULT_NODE_MIN_SEPARATION
+	)), 1.0, 16.0)
+	group_member_min_separation = clampf(float(settings.get(
+		"group_member_min_separation", OFConfig.DEFAULT_GROUP_MEMBER_MIN_SEPARATION
+	)), 1.0, 20.0)
+	group_min_separation = clampf(float(settings.get(
+		"group_min_separation", OFConfig.DEFAULT_GROUP_MIN_SEPARATION
+	)), 0.5, 24.0)
+	vertical_layer_separation = clampf(float(settings.get(
+		"vertical_layer_separation", OFConfig.DEFAULT_VERTICAL_LAYER_SEPARATION
+	)), 2.0, 30.0)
+	_sync_spacing_controls()
 	_connection_theme_id = String(settings.get("connection_theme", OFThemes.DEFAULT_CONNECTION_THEME))
 	idle_connection_alpha = clampf(float(settings.get(
 		"idle_connection_alpha", OFConfig.DEFAULT_IDLE_CONNECTION_ALPHA
@@ -5854,6 +6727,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _press_consumed:
 		return
 	var hit := _pick_node()
+	if _hidden_group_members.has(hit):
+		await _toggle_hidden_group(hit)
+		return
 	# A proxy stands in for its file, so clicking it selects that file.
 	hit = _resolve_proxy(hit)
 	if _analysis_mode != AnalysisMode.NONE and hit != "" and hit != _selected:
@@ -5974,6 +6850,38 @@ func _update_info() -> void:
 		return
 
 	out.append("[b]kind[/b]  %s" % TypeIcons.kind_label(TypeIcons.kind_of(_selected)))
+	var selected_actual := _resolve_proxy(_selected)
+	if _parent_of.has(selected_actual):
+		var base_path := String(_parent_of[selected_actual])
+		var base_class := String(_class_of.get(base_path, base_path.get_basename().get_file()))
+		out.append(
+			(
+				"[color=#%s][b]Inheritance[/b]  This is a CHILD of "
+				+ "[url=%s]%s[/url] base class[/color]"
+			) % [_theme_inheritance.to_html(false), base_path, base_class]
+		)
+	var direct_children: Array = []
+	for child_any in _parent_of.keys():
+		if String(_parent_of[child_any]) == selected_actual:
+			direct_children.append(String(child_any))
+	if not direct_children.is_empty():
+		out.append(
+			"[color=#%s][b]Inheritance[/b]  This is a BASE class of %d direct child(ren)[/color]"
+			% [_theme_inheritance.to_html(false), direct_children.size()]
+		)
+		for child_path_any in direct_children:
+			var child_path := String(child_path_any)
+			var child_class := String(_class_of.get(
+				child_path, child_path.get_basename().get_file()
+			))
+			out.append("    [url=%s]%s[/url]" % [child_path, child_class])
+	for annotation_any in _group_annotations.values():
+		var annotation: Dictionary = annotation_any
+		if _selected in (annotation.get("members", []) as Array):
+			out.append("[b]layout group[/b]  %s" % annotation.get("title", "Related files"))
+			out.append("[color=#8a8f99]%s[/color]" % annotation.get(
+				"reason", "grouped by layout evidence"
+			))
 
 	if _embed_hosts.has(_selected):
 		var embedded_here: Array = _embed_hosts[_selected]

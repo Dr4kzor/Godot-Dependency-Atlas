@@ -123,6 +123,14 @@ focus_mode = 0
 toggle_mode = true
 text = "Groups"
 
+[node name="GroupReasoning" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow"]
+custom_minimum_size = Vector2(24, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+focus_mode = 0
+toggle_mode = true
+text = "Group Info"
+
 [node name="Sep3" type="VSeparator" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=126374573]
 custom_minimum_size = Vector2(5, 0)
 layout_mode = 2
@@ -157,6 +165,22 @@ layout_mode = 2
 size_flags_horizontal = 3
 focus_mode = 0
 text = "Hide"
+
+[node name="PackHidden" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow"]
+custom_minimum_size = Vector2(24, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+focus_mode = 0
+toggle_mode = true
+text = "Pack Hidden"
+
+[node name="Spacing" type="Button" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow"]
+custom_minimum_size = Vector2(24, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+focus_mode = 0
+tooltip_text = "Adjust node and group spacing"
+text = "Spacing"
 
 [node name="Sep4" type="VSeparator" parent="Layout/MainSplit/ToolbarPanel/ToolbarScroll/ToolbarRow" unique_id=1383701105]
 custom_minimum_size = Vector2(5, 0)
