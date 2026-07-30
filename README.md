@@ -53,6 +53,9 @@ addons/godot_dependency_atlas/refactor/
 Open the **Dependency Atlas** bottom panel or choose
 **Project → Tools → Scan with Dependency Atlas**.
 
+Press **Run 3D Atlas** in the bottom panel to launch the interactive graph
+directly. There is no need to find and manually run its scene.
+
 The scan reports:
 
 - reachable files and the entry points that led to them;
@@ -70,7 +73,8 @@ than permanently erased.
 
 ## Using the 3D atlas
 
-Open and run:
+Use **Run 3D Atlas** in the Dependency Atlas bottom panel. Alternatively, open
+and run the scene directly:
 
 ```text
 addons/godot_dependency_atlas/graph3d/graph_viewer.tscn

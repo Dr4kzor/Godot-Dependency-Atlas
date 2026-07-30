@@ -2,6 +2,8 @@
 class_name DependencyAtlasPanel
 extends VBoxContainer
 
+signal open_3d_atlas_requested
+
 const OrphanScanner = preload("res://addons/godot_dependency_atlas/orphan_scanner.gd")
 const DeletionManager = preload("res://addons/godot_dependency_atlas/graph3d/deletion_manager.gd")
 const PermissionDialog = preload("res://addons/godot_dependency_atlas/graph3d/permission_dialog.gd")
@@ -44,6 +46,12 @@ func _init() -> void:
 	_scan_button.text = "Scan Project"
 	_scan_button.pressed.connect(start_scan)
 	toolbar.add_child(_scan_button)
+
+	var open_atlas_button := Button.new()
+	open_atlas_button.text = "Run 3D Atlas"
+	open_atlas_button.tooltip_text = "Launch the interactive dependency graph without manually opening its scene"
+	open_atlas_button.pressed.connect(func(): open_3d_atlas_requested.emit())
+	toolbar.add_child(open_atlas_button)
 
 	_delete_button = Button.new()
 	_delete_button.text = "Enable deleting…"

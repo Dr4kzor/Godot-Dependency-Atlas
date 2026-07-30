@@ -8,6 +8,7 @@ const MoveRefactorResultsPanel = preload("res://addons/godot_dependency_atlas/re
 const RefactorEngine = preload("res://addons/godot_dependency_atlas/refactor/refactor_engine.gd")
 
 const TOOL_MENU_LABEL := "Scan with Dependency Atlas"
+const GRAPH_SCENE := "res://addons/godot_dependency_atlas/graph3d/graph_viewer.tscn"
 
 var _panel: DependencyAtlasPanel
 var _refactor_context_menu: MoveRefactorContextMenu
@@ -17,6 +18,7 @@ var _refactor_results: MoveRefactorResultsPanel
 
 func _enter_tree() -> void:
 	_panel = DependencyAtlasPanel.new()
+	_panel.open_3d_atlas_requested.connect(_on_open_3d_atlas_requested)
 	add_control_to_bottom_panel(_panel, "Dependency Atlas")
 	add_tool_menu_item(TOOL_MENU_LABEL, _on_tool_menu_scan)
 
@@ -56,6 +58,15 @@ func _exit_tree() -> void:
 func _on_tool_menu_scan() -> void:
 	make_bottom_panel_item_visible(_panel)
 	_panel.start_scan()
+
+
+func _on_open_3d_atlas_requested() -> void:
+	var editor := get_editor_interface()
+	if editor.is_playing_scene():
+		editor.stop_playing_scene()
+		# Let the previous game process close before starting the atlas.
+		await get_tree().process_frame
+	editor.play_custom_scene(GRAPH_SCENE)
 
 
 func _on_refactor_move_requested(paths: PackedStringArray) -> void:
