@@ -675,11 +675,18 @@ static func _extract_references(
 	var dirs := {}
 	var unresolved := {}
 	var kinds := {}
+	# Paths and UIDs written only in comments are not dependencies. Keep
+	# quoted strings intact because real load/preload/FileAccess paths live
+	# there, but remove comments before structural token extraction.
+	var structural_content := (
+		_strip_code_comments_keep_strings(content)
+		if code_content != "" else content
+	)
 
 	# Structural resource-block parsing first: it is the authoritative source
 	# for .tscn/.tres dependencies, including uid-only declarations that no
 	# amount of res:// token scanning could find.
-	var blocks := _extract_resource_block_refs(content, file_set, uid_to_path)
+	var blocks := _extract_resource_block_refs(structural_content, file_set, uid_to_path)
 	var block_found: Dictionary = blocks["found"]
 	for key in block_found.keys():
 		var block_path: String = key
@@ -690,7 +697,7 @@ static func _extract_references(
 
 	# res:// path literals -- covers instanced scenes, preloads, ext_resource
 	# path= fields, and anything else written as an explicit path.
-	for token in _extract_res_tokens(content):
+	for token in _extract_res_tokens(structural_content):
 		var t: String = token
 		var resolved := _longest_known_prefix(t, file_set)
 		if resolved != "":
@@ -705,7 +712,7 @@ static func _extract_references(
 			unresolved[t] = true
 
 	# uid:// references -- covers scenes/scripts referenced by UID alone.
-	for token in _extract_uid_tokens(content):
+	for token in _extract_uid_tokens(structural_content):
 		var u: String = token
 		var target := _resolve_uid(u, uid_to_path)
 		if target != "" and file_set.has(target):
@@ -717,7 +724,7 @@ static func _extract_references(
 
 	# Loose references inside quoted literals: bare filenames, relative
 	# paths, and absolute paths written on some other machine.
-	for literal in _extract_quoted_literals(content):
+	for literal in _extract_quoted_literals(structural_content):
 		var lit: String = literal
 		if lit.begins_with("res://") or lit.begins_with("uid://"):
 			continue  # already handled precisely above
@@ -744,6 +751,64 @@ static func _extract_references(
 				kinds[target2] = "class_name_weak"
 
 	return {"files": files.keys(), "dirs": dirs.keys(), "unresolved": unresolved.keys(), "kinds": kinds}
+
+
+static func _strip_code_comments_keep_strings(content: String) -> String:
+	var out := ""
+	var i := 0
+	var in_line_comment := false
+	var in_block_comment := false
+	var in_string := false
+	var quote := ""
+	while i < content.length():
+		var c: String = content[i]
+		var next := content[i + 1] if i + 1 < content.length() else ""
+		if in_line_comment:
+			if c == "\n":
+				in_line_comment = false
+				out += "\n"
+			else:
+				out += " "
+			i += 1
+			continue
+		if in_block_comment:
+			if c == "*" and next == "/":
+				in_block_comment = false
+				out += "  "
+				i += 2
+			else:
+				out += "\n" if c == "\n" else " "
+				i += 1
+			continue
+		if in_string:
+			out += c
+			if c == "\\" and i + 1 < content.length():
+				out += content[i + 1]
+				i += 2
+				continue
+			if c == quote:
+				in_string = false
+			i += 1
+			continue
+		if c == "\"" or c == "'":
+			in_string = true
+			quote = c
+			out += c
+			i += 1
+			continue
+		if c == "#" or (c == "/" and next == "/"):
+			in_line_comment = true
+			out += "  " if c == "/" else " "
+			i += 2 if c == "/" else 1
+			continue
+		if c == "/" and next == "*":
+			in_block_comment = true
+			out += "  "
+			i += 2
+			continue
+		out += c
+		i += 1
+	return out
 
 
 ## Pulls out every quoted string literal, which is where loose file

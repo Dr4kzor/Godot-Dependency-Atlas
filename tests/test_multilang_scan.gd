@@ -64,6 +64,10 @@ func _run() -> void:
 		"res://native/stale.hpp" in orphan_paths,
 		"commented GDScript identifier falsely made an unregistered native header reachable"
 	)
+	_expect(
+		"res://stale_debug.json" in orphan_paths,
+		"commented res:// path falsely made an unused data file reachable"
+	)
 	if failures == 0:
 		print("Mixed-language scanner: all tests passed")
 	quit(failures)

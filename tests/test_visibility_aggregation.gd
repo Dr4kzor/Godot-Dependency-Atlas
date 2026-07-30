@@ -8,6 +8,11 @@ var failures := 0
 
 func _initialize() -> void:
 	var viewer = GraphViewer.new()
+	viewer._label_distance_culling = true
+	_expect(
+		is_zero_approx(viewer._icon_range_for("res://distant.gd", {})),
+		"node icons must never be distance culled"
+	)
 	var image_a := "res://art/a.png"
 	var image_b := "res://art/b.png"
 	var script := "res://code/main.gd"

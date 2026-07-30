@@ -69,9 +69,9 @@ const NODE_MAX_SIZE := 1.6
 const DIR_NODE_SIZE := 0.75
 const SATELLITE_OFFSET := 1.15
 const ORPHAN_GAP := 8.0
-## Max distance at which labels and icons are drawn -- ONLY applied when
-## distance culling is switched on (L). Off by default: labels are always
-## visible at any range. Tune freely; it has no effect while culling is off.
+## Max distance at which labels are drawn -- ONLY applied when distance
+## culling is switched on (L). Node icons always remain visible so the graph
+## never loses its spatial landmarks.
 const LABEL_VIEW_DISTANCE := 90.0
 
 # --- label legibility --------------------------------------------------------
@@ -313,7 +313,6 @@ const TREE_ICON_SIZE := 16    # matches the editor FileSystem dock
 
 # --- icons / selection -------------------------------------------------------
 const ICON_PIXEL_SIZE := 0.022
-const ICON_VIEW_DISTANCE := 200.0
 const DIM_ALPHA := 0.4
 const COLOR_ORPHAN := Color(1.0, 0.32, 0.30)
 const COLOR_CYCLE := Color(1.0, 0.25, 0.95)
@@ -2405,10 +2404,10 @@ func _label_range_for(path: String, related: Dictionary) -> float:
 	return LABEL_VIEW_DISTANCE
 
 
-func _icon_range_for(path: String, related: Dictionary) -> float:
-	if _selected != "" and related.has(path):
-		return 0.0   # a label with no icon under it reads as a bug
-	return ICON_VIEW_DISTANCE
+func _icon_range_for(_path: String, _related: Dictionary) -> float:
+	# Zero is Godot's "no distance limit". Icons are the graph's persistent
+	# spatial landmarks and must never disappear because the camera moved.
+	return 0.0
 
 
 func _color_for(path: String) -> Color:
@@ -2921,7 +2920,7 @@ func _build_embed_markers() -> void:
 		marker.position = Vector3(_positions[host2]) + Vector3(
 			0.0, label_height + EMBED_MARKER_LIFT, 0.0
 		)
-		marker.visibility_range_end = ICON_VIEW_DISTANCE
+		marker.visibility_range_end = 0.0
 		marker.visibility_range_end_margin = 20.0
 		if _host_badge_icon != null:
 			marker.texture = _host_badge_icon
@@ -2938,7 +2937,7 @@ func _build_embed_markers() -> void:
 			glyph.font_size = LABEL_FONT_SIZE
 			glyph.pixel_size = LABEL_PIXEL_SIZE * 0.7
 			glyph.position = marker.position
-			glyph.visibility_range_end = ICON_VIEW_DISTANCE
+			glyph.visibility_range_end = 0.0
 			_visuals_root.add_child(glyph)
 			marker.queue_free()
 			continue
