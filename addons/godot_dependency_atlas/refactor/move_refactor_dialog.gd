@@ -5,11 +5,12 @@ extends ConfirmationDialog
 signal refactor_requested(moves: Array)
 
 ## Size of the "Move + Refactor" popup window. Edit these values to resize it.
-const DIALOG_MIN_SIZE := Vector2i(520, 420)
+const DIALOG_MIN_SIZE := Vector2i(760, 520)
 
 var _source_path: String = ""
 var _is_dir: bool = false
 var _scan_id: int = 0
+var _latest_preview := {}
 
 var _source_label: Label
 var _new_path_edit: LineEdit
@@ -55,7 +56,7 @@ func _init() -> void:
 	new_path_hbox.add_child(_browse_button)
 
 	var preview_label := Label.new()
-	preview_label.text = "Files that reference this path (will be updated):"
+	preview_label.text = "Dry run — exact changes that will be applied after the move succeeds:"
 	vbox.add_child(preview_label)
 
 	_preview_list = ItemList.new()
@@ -149,9 +150,10 @@ func _update_preview() -> void:
 	_preview_list.clear()
 
 	if new_path.is_empty() or new_path == _source_path:
+		_latest_preview.clear()
 		_status_label.text = ""
 		_hide_scanning()
-		get_ok_button().disabled = false
+		get_ok_button().disabled = true
 		return
 
 	_scan_id += 1
@@ -159,8 +161,9 @@ func _update_preview() -> void:
 	_show_scanning()
 	get_ok_button().disabled = true
 
-	var affected: PackedStringArray = await RefactorEngine.find_references_async(
+	var preview: Dictionary = await RefactorEngine.preview_move_async(
 		_source_path,
+		new_path,
 		_is_dir,
 		func(done: int, total: int): _on_scan_progress(this_scan, done, total)
 	)
@@ -171,11 +174,30 @@ func _update_preview() -> void:
 		return
 
 	_hide_scanning()
-	get_ok_button().disabled = false
+	_latest_preview = preview
+	if not preview.get("ok", false):
+		get_ok_button().disabled = true
+		_status_label.text = "Cannot refactor: " + String(preview.get("error", "Unknown error."))
+		return
 
-	for f in affected:
-		_preview_list.add_item(f)
-	_status_label.text = "%d file(s) reference this path and will be updated." % affected.size()
+	get_ok_button().disabled = false
+	var changes: Array = preview.get("changes", [])
+	var affected_files: PackedStringArray = preview.get("affected_files", PackedStringArray())
+	if changes.is_empty():
+		_preview_list.add_item("No textual references need updating; only the selected path will move.")
+	else:
+		for change_any in changes:
+			var change: Dictionary = change_any
+			_preview_list.add_item("%s:%d  [%s]\n    %s  →  %s" % [
+				change["path"],
+				change["line"],
+				change.get("kind", "path"),
+				change["old_ref"],
+				change["new_ref"],
+			])
+	_status_label.text = "%d replacement(s) in %d file(s). Review this dry run before moving." % [
+		changes.size(), affected_files.size()
+	]
 
 
 func _on_scan_progress(scan_id: int, done: int, total: int) -> void:
@@ -201,6 +223,10 @@ func _hide_scanning() -> void:
 
 func _on_confirmed() -> void:
 	var new_path := _new_path_edit.text.strip_edges()
-	if new_path.is_empty() or new_path == _source_path:
+	if (
+		new_path.is_empty()
+		or new_path == _source_path
+		or not _latest_preview.get("ok", false)
+	):
 		return
 	refactor_requested.emit([{"from": _source_path, "to": new_path, "is_dir": _is_dir}])

@@ -119,10 +119,18 @@ For the active project, select exactly one file or folder and choose
 - the 3D graph node context menu;
 - the 3D viewer’s Project Files context menu.
 
-The tool previews textual references, moves the target, follows `.uid` and
-`.import` sidecars, updates matching `res://` references, refreshes Godot’s
-filesystem, and rescans the atlas. Progress is shown while references are
-being calculated.
+Before anything moves, the dialog presents a line-by-line dry run showing each
+old and new reference. The planner understands `res://`, project-relative,
+referencing-file-relative, Windows-backslash, and unambiguous bare-filename
+forms used by Godot resources, C/C++ includes, GDExtension manifests, C# project
+membership, and common build systems. Relative paths are recalculated against
+the referencing file’s post-move location, including files that move together
+inside a folder.
+
+Execution first checks that every affected text file is writable. It then moves
+the target, follows `.uid` and `.import` sidecars, applies the reviewed plan,
+refreshes Godot’s filesystem, and rescans the atlas. Progress is shown during
+both planning and execution.
 
 Refactor logs are written beneath:
 
@@ -130,9 +138,10 @@ Refactor logs are written beneath:
 dependency_atlas/refactor_logs/
 ```
 
-Commit or back up the project before restructuring it. The refactor is
-text-based and does not currently prove or rewrite every possible relative,
-generated, reflected, or runtime-computed reference.
+Commit or back up the project before restructuring it. Refactoring remains
+text-based and cannot prove generated, reflected, environment-selected, custom
+include-root, or runtime-computed references. Ambiguous bare filenames are
+deliberately left unchanged rather than risking the wrong replacement.
 
 ## Language and build support
 
