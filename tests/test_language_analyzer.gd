@@ -6,6 +6,7 @@ var failures := 0
 func _initialize() -> void:
 	_test_csharp()
 	_test_cpp()
+	_test_language_boundaries()
 	_test_build_roots()
 	_test_native_bridge()
 	if failures == 0:
@@ -47,6 +48,34 @@ func _test_cpp() -> void:
 	_expect(refs.kinds.get(base_path, "") == "include", "C++: include edge kind was not retained")
 	var hierarchy := Analyzer.hierarchy(contents, symbols)
 	_expect(hierarchy.parent_of.get(child_path, "") == base_path, "C++: public inheritance was not resolved")
+
+
+func _test_language_boundaries() -> void:
+	var header := "res://legacy/ModelGenerator.hpp"
+	var gdscript := "res://model_generator.gd"
+	var csharp := "res://managed/Consumer.cs"
+	var contents := {
+		header: "class MODEL_GENERATOR_REFRACTOR {};",
+		gdscript: "class_name MODEL_GENERATOR_REFRACTOR\nextends Node\n",
+		csharp: "public class Consumer { MODEL_GENERATOR_REFRACTOR value; }",
+	}
+	var files := {header: true, gdscript: true, csharp: true}
+	var symbols := Analyzer.build_symbol_index(contents)
+	var gd_refs := Analyzer.references(
+		gdscript, contents[gdscript], files, {}, symbols
+	)
+	var cs_refs := Analyzer.references(
+		csharp, contents[csharp], files, {}, symbols
+	)
+	_expect(
+		not header in gd_refs.files,
+		"Languages: GDScript identifier leaked into a same-named C++ header"
+	)
+	_expect(
+		not header in cs_refs.files,
+		"Languages: C# identifier leaked into a same-named C++ header"
+	)
+
 
 func _test_build_roots() -> void:
 	var project := "res://Game.csproj"

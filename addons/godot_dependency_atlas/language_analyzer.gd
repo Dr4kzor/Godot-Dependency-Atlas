@@ -88,11 +88,20 @@ static func references(
 				found[resolved] = true
 				kinds[resolved] = "include"
 
-	if ext in SOURCE_EXTENSIONS:
+	# A matching identifier is only type evidence inside the same language
+	# family. GDScript class_name declarations are resolved by the scanner,
+	# and a GDScript class can legitimately have the same name as an old C++
+	# implementation without depending on its header. Native classes exposed
+	# to Godot are handled separately by the explicit GDExtension bridge.
+	if ext in CSHARP_EXTENSIONS or ext in NATIVE_EXTENSIONS:
 		for symbol_any in symbol_index.keys():
 			var symbol: String = symbol_any
 			var target: String = symbol_index[symbol]
-			if target != path and _word_contains(clean, symbol):
+			if (
+				target != path
+				and _same_language_family(path, target)
+				and _word_contains(clean, symbol)
+			):
 				found[target] = true
 				if not kinds.has(target):
 					kinds[target] = "type"
@@ -430,7 +439,7 @@ static func hierarchy(contents: Dictionary, symbol_index: Dictionary) -> Diction
 				class_of[path] = name
 			if parent != "" and symbol_index.has(parent):
 				var parent_path: String = symbol_index[parent]
-				if parent_path != path:
+				if parent_path != path and _same_language_family(path, parent_path):
 					parent_of[path] = parent_path
 	return {"parent_of": parent_of, "class_of": class_of}
 
@@ -497,6 +506,15 @@ static func _unqualify(name: String) -> String:
 	var normalised := name.replace("::", ".")
 	var pieces := normalised.split(".")
 	return String(pieces[pieces.size() - 1]) if not pieces.is_empty() else ""
+
+
+static func _same_language_family(first: String, second: String) -> bool:
+	var first_ext := first.get_extension().to_lower()
+	var second_ext := second.get_extension().to_lower()
+	return (
+		(first_ext in CSHARP_EXTENSIONS and second_ext in CSHARP_EXTENSIONS)
+		or (first_ext in NATIVE_EXTENSIONS and second_ext in NATIVE_EXTENSIONS)
+	)
 
 
 static func _resolve_include(path: String, include_name: String, file_set: Dictionary, basename_index: Dictionary) -> String:

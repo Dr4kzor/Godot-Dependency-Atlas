@@ -60,6 +60,10 @@ func _run() -> void:
 	_expect(not "res://icon.svg" in orphan_paths, "project icon reported orphan")
 	_expect(not "res://native/child.cpp" in orphan_paths, "build-reached native file reported orphan")
 	_expect(not "res://native/bin/libdemo.so" in orphan_paths, "loaded native library reported orphan")
+	_expect(
+		"res://native/stale.hpp" in orphan_paths,
+		"commented GDScript identifier falsely made an unregistered native header reachable"
+	)
 	if failures == 0:
 		print("Mixed-language scanner: all tests passed")
 	quit(failures)

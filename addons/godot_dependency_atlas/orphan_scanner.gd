@@ -190,7 +190,10 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 
 	# uid -> path, from companion .uid files and embedded uid="..." headers.
 	var uid_to_path := {}
-	# class_name -> path, for GDScript/C# global classes.
+	# class_name -> path, for GDScript global classes. C#/C/C++ declarations
+	# live in the language analyzer's separate symbol index: merging native
+	# declarations here lets an identifier in GDScript (even only a comment)
+	# falsely make an unregistered header reachable.
 	var class_to_path := {}
 	for i in all_files.size():
 		var p2: String = all_files[i]
@@ -203,7 +206,7 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 		if body != "":
 			_harvest_ext_resource_pairs(body, uid_to_path)
 		var ext2: String = p2.get_extension().to_lower()
-		if ext2 == "gd" or ext2 == "cs":
+		if ext2 == "gd":
 			var cls := _extract_class_name(body)
 			if cls != "":
 				class_to_path[cls] = p2
@@ -212,13 +215,9 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 		if main_loop is SceneTree and (i % YIELD_EVERY_N == 0):
 			await (main_loop as SceneTree).process_frame
 
-	# C#/C/C++ declarations share the same symbol map used by the generic
-	# reference pass and by the weighted 3D link analysis.
+	# C#/C/C++ declarations are intentionally kept separate from Godot's
+	# global GDScript class_name namespace.
 	var language_symbols := LanguageAnalyzer.build_symbol_index(content_cache)
-	for symbol_any in language_symbols.keys():
-		var symbol: String = symbol_any
-		if not class_to_path.has(symbol):
-			class_to_path[symbol] = language_symbols[symbol]
 
 	# ---------- 3. TRAVERSE ----------
 	# Walk outward from the entry points. For each file: parse it completely,

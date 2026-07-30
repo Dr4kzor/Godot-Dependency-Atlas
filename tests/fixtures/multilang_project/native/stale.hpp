@@ -1,0 +1,1 @@
+class STALE_NATIVE_TYPE {};
