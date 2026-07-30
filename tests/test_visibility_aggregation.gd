@@ -95,8 +95,13 @@ func _initialize() -> void:
 		"comment evidence preview text was not left aligned"
 	)
 	_expect(
-		"▶    42 │ │   #load" in preview_text.text,
+		"   42 │ │   #load" in preview_text.text,
 		"comment evidence preview omitted its editor-style gutter or indentation"
+	)
+	var focus_marker := viewer._evidence_card_viewport.get_child(2) as Label
+	_expect(
+		focus_marker.text == "▶" and focus_marker.position.x < preview_text.position.x,
+		"comment evidence focus marker was not isolated in a fixed-width gutter"
 	)
 	_expect(
 		viewer._evidence_card_viewport != null,

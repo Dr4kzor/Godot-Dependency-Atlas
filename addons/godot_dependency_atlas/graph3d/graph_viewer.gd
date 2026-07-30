@@ -4370,6 +4370,7 @@ func _update_comment_evidence_card() -> void:
 	var source := String(data.get("source", ""))
 	var target := String(data.get("target", ""))
 	var entries: Array = data.get("evidence", [])
+	var focus_rows: Array[int] = []
 	var lines: Array[String] = [
 		"COMMENTED DEPENDENCY",
 		"",
@@ -4391,6 +4392,8 @@ func _update_comment_evidence_card() -> void:
 		lines.append("")
 		for context_any in evidence.get("context", []):
 			var context: Dictionary = context_any
+			if bool(context.get("focus", false)):
+				focus_rows.append(lines.size())
 			lines.append(_format_evidence_source_line(context))
 	if entries.size() > 4:
 		lines.append("")
@@ -4419,8 +4422,10 @@ func _update_comment_evidence_card() -> void:
 	viewport.add_child(background)
 	var text := Label.new()
 	text.text = "\n".join(lines)
-	text.position = Vector2(44.0, 38.0)
-	text.size = Vector2(card_width_pixels - 88, card_height_pixels - 76)
+	# The marker has its own fixed-width gutter. Keeping it out of the source
+	# string means the fallback glyph width of ▶ cannot shift numbered lines.
+	text.position = Vector2(58.0, 38.0)
+	text.size = Vector2(card_width_pixels - 102, card_height_pixels - 76)
 	text.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	text.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 	text.autowrap_mode = TextServer.AUTOWRAP_OFF
@@ -4435,6 +4440,17 @@ func _update_comment_evidence_card() -> void:
 	text.add_theme_color_override("font_outline_color", Color(0.02, 0.10, 0.12))
 	text.add_theme_constant_override("outline_size", 4)
 	viewport.add_child(text)
+	var line_height := code_font.get_height(30)
+	for focus_row in focus_rows:
+		var marker := Label.new()
+		marker.text = "▶"
+		marker.position = Vector2(18.0, 38.0 + float(focus_row) * line_height)
+		marker.size = Vector2(34.0, line_height)
+		marker.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		marker.add_theme_font_override("font", code_font)
+		marker.add_theme_font_size_override("font_size", 30)
+		marker.add_theme_color_override("font_color", Color(0.28, 0.88, 0.92))
+		viewport.add_child(marker)
 	_visuals_root.add_child(viewport)
 
 	var card := Sprite3D.new()
@@ -4465,9 +4481,8 @@ func _format_evidence_source_line(context: Dictionary) -> String:
 		indent_guides += "│   "
 		raw = raw.substr(4)
 		leading_spaces -= 4
-	var marker := "▶" if bool(context.get("focus", false)) else " "
-	return "%s %5d │ %s%s" % [
-		marker, int(context.get("line", 0)), indent_guides, raw,
+	return "%5d │ %s%s" % [
+		int(context.get("line", 0)), indent_guides, raw,
 	]
 
 
