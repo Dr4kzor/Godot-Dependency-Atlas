@@ -1,0 +1,5 @@
+[gd_scene format=3]
+
+[ext_resource type="Texture2D" path="res://addons/missing_pack/textures/gone.png" id="1"]
+
+[node name="Root" type="Node"]

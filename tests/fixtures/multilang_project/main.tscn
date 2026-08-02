@@ -1,10 +1,24 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=7 format=3]
 
 [ext_resource type="Script" path="res://managed/Player.cs" id="1"]
 [ext_resource type="Script" path="res://native/native_user.gd" id="2"]
+[ext_resource type="PackedScene" path="res://native/native_child_scene.tscn" id="3"]
+[ext_resource type="Script" path="res://native_scons/chunk_user.gd" id="4"]
+[ext_resource type="Script" path="res://native_scons/VoxelChunk.gd" id="5"]
+[ext_resource type="PackedScene" path="res://native/broken_path_scene.tscn" id="6"]
 
 [node name="Main" type="Node"]
 script = ExtResource("1")
 
 [node name="NativeUser" type="Node" parent="."]
 script = ExtResource("2")
+
+[node name="NativeChildScene" parent="." instance=ExtResource("3")]
+
+[node name="ChunkUser" type="Node" parent="."]
+script = ExtResource("4")
+
+[node name="VoxelChunkStub" type="Node" parent="."]
+script = ExtResource("5")
+
+[node name="BrokenPathScene" parent="." instance=ExtResource("6")]

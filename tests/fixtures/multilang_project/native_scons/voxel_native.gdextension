@@ -1,0 +1,7 @@
+[configuration]
+entry_symbol = "voxel_native_library_init"
+compatibility_minimum = "4.4"
+
+[libraries]
+linux.debug.arm64 = "./bin/voxel_native.linux.template_debug.arm64.so"
+linux.debug.x86_64 = "res://native_scons/bin/voxel_native.linux.template_debug.arm64.so"

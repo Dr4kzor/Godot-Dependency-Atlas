@@ -46,6 +46,60 @@ func _run() -> void:
 		"GDScript registered-class-to-library edge missing"
 	)
 	_expect(
+		"res://native/bin/libdemo.so" in graph.get("res://native/native_child_scene.tscn", []),
+		"Scene type=NativeChild did not link to the generated library"
+	)
+	# A missing res://addons/... file must NOT expand into a dynamic dir for
+	# the whole addons tree (that invented joystick→VoxelWorld-style edges).
+	var broken_refs: Array = graph.get("res://native/broken_path_scene.tscn", [])
+	_expect(
+		not "res://native/bin/libdemo.so" in broken_refs,
+		"missing texture path falsely linked broken_path_scene to the native library"
+	)
+	_expect(
+		not "res://native/child.cpp" in broken_refs,
+		"missing texture path falsely linked broken_path_scene to native sources"
+	)
+	for dyn_any in result.get("dynamic_dirs", []):
+		var dyn: Dictionary = dyn_any
+		_expect(
+			String(dyn.get("referenced_in", "")) != "res://native/broken_path_scene.tscn",
+			"missing file path was treated as a dynamic directory reference"
+		)
+	_expect(
+		"res://native_scons/voxel_native.gdextension" in root_paths,
+		"extension_list.cfg did not seed the SCons GDExtension root"
+	)
+	_expect(
+		"res://native_scons/bin/voxel_native.linux.template_debug.arm64.so"
+		in graph.get("res://native_scons/voxel_native.gdextension", []),
+		"SCons GDExtension descriptor-to-library edge missing"
+	)
+	_expect(
+		"res://native_scons/src/voxel_chunk.cpp"
+		in graph.get("res://native_scons/bin/voxel_native.linux.template_debug.arm64.so", []),
+		"SCons library-to-Glob-source edge missing"
+	)
+	_expect(
+		"res://native_scons/bin/voxel_native.linux.template_debug.arm64.so"
+		in graph.get("res://native_scons/chunk_user.gd", []),
+		"GDScript VoxelChunk use did not link to the SCons library"
+	)
+	_expect(
+		"res://native_scons/bin/voxel_native.linux.template_debug.arm64.so"
+		in graph.get("res://native_scons/VoxelChunk.gd", []),
+		"Native class stub .gd did not link to the SCons library"
+	)
+	var scons_refs: Array = graph.get("res://native_scons/SConstruct", [])
+	_expect(
+		not "res://native_scons/godot-cpp/gen/src/classes/virtual_joystick.cpp" in scons_refs,
+		"SConstruct falsely linked vendored virtual_joystick.cpp"
+	)
+	_expect(
+		not graph.has("res://native_scons/godot-cpp/gen/src/classes/virtual_joystick.cpp"),
+		"vendored godot-cpp file was inventoried"
+	)
+	_expect(
 		"res://native/bin/libdemo.so" in graph.get("res://managed/Player.cs", []),
 		"C# DllImport-to-native-library edge missing"
 	)
@@ -55,6 +109,11 @@ func _run() -> void:
 	var orphan_paths := []
 	for orphan_any in result.get("orphans", []):
 		orphan_paths.append(String((orphan_any as Dictionary).path))
+	_expect(
+		not "res://native_scons/godot-cpp/gen/src/classes/virtual_joystick.cpp" in orphan_paths,
+		"vendored godot-cpp file appeared in orphan list"
+	)
+	_expect(not "res://native_scons/bin/voxel_native.linux.template_debug.arm64.so" in orphan_paths, "SCons library reported orphan")
 	_expect(not "res://managed/BaseActor.cs" in orphan_paths, "SDK-implicit C# file reported orphan")
 	_expect(not "res://managed/Player.cs" in orphan_paths, "build/runtime-reached C# file reported orphan")
 	_expect(not "res://icon.svg" in orphan_paths, "project icon reported orphan")

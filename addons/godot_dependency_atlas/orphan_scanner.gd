@@ -34,6 +34,9 @@ const LanguageAnalyzer = preload("res://addons/godot_dependency_atlas/language_a
 const SKIP_DIRS := [
 	".godot", ".git", ".import", "refactor_log", "orphan_scan_log",
 	"dependency_atlas", "godot_dependency_atlas",
+	# Vendored Godot C++ bindings are an SDK, not project sources. Scanning
+	# them invents thousands of false build edges (e.g. virtual_joystick.cpp).
+	"godot-cpp",
 ]
 
 ## Where scan reports are written.
@@ -237,6 +240,44 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 	var native_edge_kinds: Dictionary = native_bridge.get("kinds", {})
 	var native_class_libraries: Dictionary = native_bridge.get("class_libraries", {})
 	var native_libraries: Array = native_bridge.get("libraries", [])
+	var native_class_methods := {}
+
+	# Godot records enabled GDExtensions in .godot/extension_list.cfg. The
+	# rest of .godot/ stays skipped, but this file is the authoritative
+	# "include these binaries" list and must seed roots + library edges.
+	var extension_list_path := "res://.godot/extension_list.cfg"
+	var extension_list_text := _read_special_text(extension_list_path)
+	for descriptor_any in LanguageAnalyzer.parse_extension_list(extension_list_text):
+		var descriptor := String(descriptor_any)
+		if not file_set.has(descriptor):
+			continue
+		# Ensure descriptor content is available even if somehow unread.
+		if not content_cache.has(descriptor):
+			var disk_read: Dictionary = await _read_file_async(descriptor, main_loop)
+			content_cache[descriptor] = disk_read["text"]
+		for library_any in LanguageAnalyzer.gdextension_library_paths(
+			descriptor, String(content_cache.get(descriptor, "")), file_set, basename_index
+		):
+			var listed_library := String(library_any)
+			if not native_libraries.has(listed_library):
+				native_libraries.append(listed_library)
+			if not native_edges.has(descriptor):
+				native_edges[descriptor] = []
+			if not listed_library in native_edges[descriptor]:
+				native_edges[descriptor].append(listed_library)
+			if not native_edge_kinds.has(descriptor):
+				native_edge_kinds[descriptor] = {}
+			native_edge_kinds[descriptor][listed_library] = "gdextension_library"
+
+	# Live ClassDB view of the loaded binary (current project only).
+	if scanning_current_project():
+		var live_classes := LanguageAnalyzer.class_libraries_from_classdb(
+			native_libraries, native_class_libraries
+		)
+		for class_any in live_classes.keys():
+			var live_name := String(class_any)
+			native_class_libraries[live_name] = String(live_classes[live_name])
+			native_class_methods[live_name] = LanguageAnalyzer.classdb_public_methods(live_name)
 
 	# Authoritative pass, unioned with the text scan below. The two find
 	# different things: Godot knows every real resource dependency including
@@ -263,6 +304,13 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 		if not root_paths.has(build_path):
 			root_paths[build_path] = true
 			roots.append(build_root)
+	# Enabled extensions from extension_list.cfg are always roots, even when
+	# build_roots would have already added them — keep the explicit kind.
+	for descriptor_any2 in LanguageAnalyzer.parse_extension_list(extension_list_text):
+		var enabled_descriptor := String(descriptor_any2)
+		if file_set.has(enabled_descriptor) and not root_paths.has(enabled_descriptor):
+			root_paths[enabled_descriptor] = true
+			roots.append({"path": enabled_descriptor, "kind": "native extension"})
 	if roots.is_empty():
 		return {
 			"orphans": [], "roots": [], "dynamic_dirs": [], "graph": {}, "unresolved_refs": [], "log_text": "", "orphan_graph": {}, "hierarchy": {}, "godot_pass_used": false, "godot_dependency_files": 0,
@@ -377,14 +425,21 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 
 			# GDScript/C# code naming a class registered into a GDExtension
 			# depends on the generated library even though the engine exposes
-			# no res:// path for that runtime class.
+			# no res:// path for that runtime class. Scenes only count explicit
+			# node type="NativeClass" (not free-text / path / node-name matches).
+			# Stub scripts named after the native class count too.
 			if code_content != "":
 				for class_any in native_class_libraries:
 					var native_class := String(class_any)
 					var native_library := String(native_class_libraries[native_class])
+					var mentioned := _word_contains(code_content, native_class)
+					if not mentioned and ext_now == "gd":
+						# Stub .gd beside a native class (class_name commented out,
+						# file still named VoxelChunk.gd) depends on the library.
+						mentioned = current.get_file().get_basename() == native_class
 					if (
 						native_library != current
-						and _word_contains(code_content, native_class)
+						and mentioned
 						and not found.has(native_library)
 					):
 						found.append(native_library)
@@ -400,6 +455,17 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 						if not edge_kinds.has(current):
 							edge_kinds[current] = {}
 						edge_kinds[current][interop_library] = "native_interop"
+			elif ext_now in ["tscn", "tres"]:
+				for type_any in LanguageAnalyzer.native_types_in_resource(
+					content, native_class_libraries
+				):
+					var native_type := String(type_any)
+					var native_library2 := String(native_class_libraries[native_type])
+					if native_library2 != current and not found.has(native_library2):
+						found.append(native_library2)
+						if not edge_kinds.has(current):
+							edge_kinds[current] = {}
+						edge_kinds[current][native_library2] = "native_class"
 
 		# These inferred edges also apply to an unreadable .so/.dll/.dylib.
 		for bridge_target_any in native_edges.get(current, []):
@@ -550,6 +616,8 @@ static func scan_async(progress: Callable = Callable()) -> Dictionary:
 		"reachable_count": reachable_count,
 		"total_files": all_files.size(),
 		"truncated_files": truncated,
+		"native_class_libraries": native_class_libraries,
+		"native_class_methods": native_class_methods,
 		"error": "",
 	}
 
@@ -818,9 +886,15 @@ static func _extract_references(
 			if not kinds.has(resolved):
 				kinds[resolved] = "path"
 			continue
-		var dir_resolved := _longest_known_prefix(t, dir_set)
-		if dir_resolved != "":
-			dirs[dir_resolved] = true
+		# Directory references must be intentional (exact dir path, optional
+		# trailing slash). Character-trimming a MISSING file path like
+		# res://addons/virtual_joystick/missing.png down to res://addons
+		# used to mark the entire addons tree as a dynamic directory of this
+		# file -- inventing hundreds of false edges (e.g. joystick scene →
+		# VoxelWorld.cpp).
+		var dir_token := t.trim_suffix("/")
+		if dir_set.has(dir_token):
+			dirs[dir_token] = true
 		else:
 			unresolved[t] = true
 
@@ -1442,6 +1516,17 @@ static func _word_contains(content: String, word: String) -> bool:
 
 
 # ---------------------------------------------------------------- file access
+
+## Reads a text config that lives outside normal inventory (for example
+## .godot/extension_list.cfg while the rest of .godot/ stays skipped).
+static func _read_special_text(logical: String) -> String:
+	var f := FileAccess.open(_disk_path(logical), FileAccess.READ)
+	if f == null:
+		return ""
+	var text := f.get_as_text()
+	f.close()
+	return text
+
 
 ## Reads a file as raw bytes, decoded 1 byte -> 1 character.
 ##

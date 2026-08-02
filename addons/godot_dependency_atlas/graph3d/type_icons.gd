@@ -19,7 +19,7 @@ const ICON_DIR := "res://addons/godot_dependency_atlas/graph3d/icons"
 
 enum Kind {
 	SCENE, SCRIPT, SHADER, RESOURCE, IMAGE, AUDIO, VIDEO, MESH,
-	FONT, TEXT, DATA, ARCHIVE, TRANSLATION, BINARY, FOLDER, OTHER,
+	FONT, TEXT, DATA, ARCHIVE, TRANSLATION, BINARY, GDEXTENSION, FOLDER, OTHER,
 }
 
 ## Extension -> Kind. Anything unlisted falls through to OTHER, which is
@@ -49,8 +49,11 @@ const EXTENSION_KINDS := {
 	"zip": Kind.ARCHIVE, "pck": Kind.ARCHIVE, "tar": Kind.ARCHIVE,
 	"gz": Kind.ARCHIVE, "7z": Kind.ARCHIVE, "rar": Kind.ARCHIVE,
 	"po": Kind.TRANSLATION, "pot": Kind.TRANSLATION, "translation": Kind.TRANSLATION,
+	# Shared libraries / opaque blobs. Prefer File over FileBroken so they
+	# read as real binaries rather than missing resources.
 	"bin": Kind.BINARY, "dat": Kind.BINARY, "so": Kind.BINARY, "dll": Kind.BINARY,
-	"dylib": Kind.BINARY, "wasm": Kind.BINARY, "gdextension": Kind.BINARY,
+	"dylib": Kind.BINARY, "wasm": Kind.BINARY,
+	"gdextension": Kind.GDEXTENSION,
 }
 
 const KIND_COLORS := {
@@ -67,7 +70,8 @@ const KIND_COLORS := {
 	Kind.DATA: Color(0.60, 0.85, 0.72),
 	Kind.ARCHIVE: Color(0.78, 0.65, 0.45),
 	Kind.TRANSLATION: Color(0.55, 0.75, 1.00),
-	Kind.BINARY: Color(0.62, 0.58, 0.72),
+	Kind.BINARY: Color(0.55, 0.62, 0.78),
+	Kind.GDEXTENSION: Color(0.45, 0.78, 0.92),
 	Kind.FOLDER: Color(0.55, 0.58, 0.68),
 	Kind.OTHER: Color(1.00, 0.30, 0.55),
 }
@@ -87,7 +91,10 @@ const KIND_ICON_NAMES := {
 	Kind.DATA: "JSON",
 	Kind.ARCHIVE: "Zip",
 	Kind.TRANSLATION: "Translation",
-	Kind.BINARY: "FileBroken",
+	# Godot has no dedicated "bin" glyph; File is the closest stock icon for
+	# compiled shared libraries (.so/.dll). FileBroken was wrongly used before.
+	Kind.BINARY: "File",
+	Kind.GDEXTENSION: "GDExtension",
 	Kind.FOLDER: "Folder",
 	Kind.OTHER: "File",
 }
@@ -103,16 +110,17 @@ const ICON_FALLBACKS := {
 	Kind.RESOURCE: ["Resource", "ResourcePreloader", "Object", "File"],
 	Kind.IMAGE: ["Texture2D", "CompressedTexture2D", "ImageTexture", "Image"],
 	Kind.AUDIO: ["AudioStream", "AudioStreamPlayer", "AudioStreamWAV", "AudioBusLayout"],
-	Kind.VIDEO: ["VideoStream", "VideoStreamPlayer", "FileBroken"],
+	Kind.VIDEO: ["VideoStream", "VideoStreamPlayer", "File"],
 	Kind.MESH: ["Mesh", "ArrayMesh", "MeshInstance3D"],
 	Kind.FONT: ["Font", "FontFile", "FontVariation"],
 	Kind.TEXT: ["TextFile", "File", "Font"],
 	Kind.DATA: ["JSON", "ConfigFile", "File"],
 	Kind.ARCHIVE: ["Zip", "Folder", "File"],
 	Kind.TRANSLATION: ["Translation", "TranslationServer", "File"],
-	Kind.BINARY: ["GDExtension", "FileBroken", "File"],
+	Kind.BINARY: ["File", "Object", "Resource"],
+	Kind.GDEXTENSION: ["GDExtension", "PluginScript", "Object", "File"],
 	Kind.FOLDER: ["Folder", "FolderBrowse", "Filesystem"],
-	Kind.OTHER: ["File", "FileBroken", "Object"],
+	Kind.OTHER: ["File", "Object"],
 }
 
 

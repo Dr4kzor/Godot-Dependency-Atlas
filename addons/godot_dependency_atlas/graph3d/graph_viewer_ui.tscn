@@ -417,6 +417,12 @@ layout_mode = 2
 size_flags_horizontal = 3
 text = "Save as…"
 
+[node name="WriteAiMap" type="Button" parent="Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/RightPanel/RightBox/LogRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Write dependency_atlas/ai_map.md for coding agents (also auto-refreshed on each scan)"
+text = "Write AI map"
+
 [node name="LeftShow" type="Button" parent="Layout/MainSplit/ContentRoot" unique_id=747506982]
 visible = false
 layout_mode = 1

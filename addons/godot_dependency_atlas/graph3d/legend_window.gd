@@ -177,6 +177,10 @@ func _kind_description(kind_name: String) -> String:
 			return ".tres / .res"
 		"DATA":
 			return ".json / .cfg / .import / .uid"
+		"BINARY":
+			return ".so / .dll / .dylib / .wasm — compiled native libraries"
+		"GDEXTENSION":
+			return ".gdextension — GDExtension loader descriptor"
 		"OTHER":
 			return "Unrecognised extension — deliberately loud so oddities stand out."
 	return ""

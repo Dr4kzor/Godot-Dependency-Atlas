@@ -23,6 +23,7 @@ extends Node3D
 ## readable from the side.
 
 const OrphanScanner = preload("res://addons/godot_dependency_atlas/orphan_scanner.gd")
+const AiMap = preload("res://addons/godot_dependency_atlas/ai_map.gd")
 const FlyCamera = preload("res://addons/godot_dependency_atlas/graph3d/fly_camera.gd")
 const TypeIcons = preload("res://addons/godot_dependency_atlas/graph3d/type_icons.gd")
 const GraphMetrics = preload("res://addons/godot_dependency_atlas/graph3d/graph_metrics.gd")
@@ -391,6 +392,7 @@ var _hidden_extensions := {}
 var _custom_extensions: Array = []
 var _project_extensions := {}
 var _last_log_text := ""
+var _last_scan_result := {}
 var _godot_pass_used := true
 var _godot_dependency_files := 0
 var _save_dialog: FileDialog
@@ -603,6 +605,10 @@ func _run_scan() -> void:
 		return
 
 	_last_log_text = String(result.get("log_text", ""))
+	_last_scan_result = result
+	var map_error := AiMap.write_from_scan(result, _scan_root)
+	if map_error != "":
+		push_warning("Dependency Atlas AI map: " + map_error)
 	_godot_pass_used = bool(result.get("godot_pass_used", false))
 	_godot_dependency_files = int(result.get("godot_dependency_files", 0))
 	_orphan_graph = result.get("orphan_graph", {})
@@ -5019,6 +5025,7 @@ func _build_ui() -> void:
 	$UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/RightPanel/RightBox/LogRow/Reset.pressed.connect(_go_home)
 	$UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/RightPanel/RightBox/LogRow/SaveLog.pressed.connect(_on_save_log)
 	$UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/RightPanel/RightBox/LogRow/SaveAs.pressed.connect(_on_save_log_as)
+	$UI/Layout/MainSplit/ContentRoot/RootSplit/InnerSplit/RightPanel/RightBox/LogRow/WriteAiMap.pressed.connect(_on_write_ai_map)
 	_left_show_button.pressed.connect(func(): _set_left_visible(true))
 	_right_show_button.pressed.connect(func(): _set_right_visible(true))
 
@@ -5480,6 +5487,18 @@ func _on_save_log_as() -> void:
 func _on_save_log_path_chosen(path: String) -> void:
 	var problem := OrphanScanner.write_log_to(path, _last_log_text)
 	_show_toast(("Could not save: " + problem) if problem != "" else ("Log saved to " + path))
+
+
+func _on_write_ai_map() -> void:
+	if _last_scan_result.is_empty() or String(_last_scan_result.get("error", "")) != "":
+		_show_toast("Run a successful scan first.")
+		return
+	var problem := AiMap.write_from_scan(_last_scan_result, _scan_root)
+	_show_toast(
+		("Could not write AI map: " + problem)
+		if problem != ""
+		else ("AI map written to " + AiMap.map_path(_scan_root))
+	)
 
 
 ## While flying, no UI control may hold keyboard focus. A focused Tree reads

@@ -8,6 +8,7 @@ extends RefCounted
 ##   dependency_atlas/
 ##       .gitignore              ignores the logs, keeps the config tracked
 ##       dependency-atlas.config    filters + display settings
+##       ai_map.md               compact agent-oriented scan summary
 ##       deleted.log             audit trail of files moved to trash
 ##       logs/                   scan reports
 ##
@@ -26,15 +27,15 @@ const DEFAULT_GROUP_MIN_SEPARATION := 3.0
 const DEFAULT_VERTICAL_LAYER_SEPARATION := 10.0
 
 const GITIGNORE_BODY := """# Dependency Atlas
-# Scan reports are machine-local and change on every run, so they are not
-# tracked. The config file IS tracked deliberately: filter and theme choices
-# are project decisions worth sharing across a team.
+# The config file and ai_map.md ARE tracked deliberately: filter/theme
+# choices and the agent-oriented dependency summary are project decisions.
 logs/
 *.log
 
 # deleted.log is tracked deliberately: it is the record of what this tool
 # removed, which is exactly the kind of thing a team wants in history.
 !deleted.log
+!ai_map.md
 """
 
 

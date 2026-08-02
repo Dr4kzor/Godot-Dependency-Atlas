@@ -106,11 +106,13 @@ static func references(
 				if not kinds.has(target):
 					kinds[target] = "type"
 
-	# Build languages commonly list sources without quotes (CMake and Meson)
-	# or via extension globs (SCons). Match only known project files, so a
-	# compiler flag or library name cannot invent a dependency.
+	# Build membership from explicit paths/basenames and real Glob("...") /
+	# glob patterns only. A bare "*." + extension substring used to treat
+	# every source under the manifest directory as compiled, which pulled in
+	# vendored SDKs whenever SConstruct contained Glob("src/*.cpp").
 	if is_build_file(path):
 		var build_base := path.get_base_dir()
+		var prefix := build_base if build_base.ends_with("/") else build_base + "/"
 		for candidate_any in file_set.keys():
 			var candidate: String = candidate_any
 			if candidate == path:
@@ -118,12 +120,17 @@ static func references(
 			var candidate_ext := candidate.get_extension().to_lower()
 			if not (candidate_ext in SOURCE_EXTENSIONS or candidate_ext in BUILD_EXTENSIONS):
 				continue
-			var relative := candidate.trim_prefix(build_base + "/")
-			var explicitly_listed := content.contains(relative) or content.contains(candidate.get_file())
-			var globbed := candidate.begins_with(build_base + "/") and (content.contains("*." + candidate_ext) or content.contains("**/*." + candidate_ext))
-			if explicitly_listed or globbed:
+			if not (candidate.get_base_dir() == build_base or candidate.begins_with(prefix)):
+				continue
+			var relative := candidate.trim_prefix(prefix)
+			if content.contains(relative) or content.contains(candidate.get_file()):
 				found[candidate] = true
 				kinds[candidate] = "build"
+		for globbed_any in _files_matching_globs(path, _extract_glob_patterns(content), file_set):
+			var globbed_path := String(globbed_any)
+			if globbed_path != path:
+				found[globbed_path] = true
+				kinds[globbed_path] = "build"
 
 	return {"files": found.keys(), "kinds": kinds}
 
@@ -242,6 +249,11 @@ static func native_library_references(content: String, libraries: Array) -> Arra
 	return out
 
 
+static func gdextension_library_paths(descriptor: String, content: String,
+		file_set: Dictionary, basename_index: Dictionary) -> Array:
+	return _gdextension_libraries(descriptor, content, file_set, basename_index)
+
+
 static func _gdextension_libraries(descriptor: String, content: String,
 		file_set: Dictionary, basename_index: Dictionary) -> Array:
 	var out: Array = []
@@ -305,16 +317,35 @@ static func _native_build_targets(contents: Dictionary, file_set: Dictionary,
 					sources.append(source_any)
 			definition["sources"] = sources
 
-		# Conventional SCons: env.SharedLibrary("name", [sources...]).
-		var scons := RegEx.new()
-		scons.compile("(?is)(?:SharedLibrary|Library)[ \\t\\r\\n]*\\([ \\t\\r\\n]*[\\\"']([^\\\"']+)[\\\"'][ \\t\\r\\n]*,[ \\t\\r\\n]*([^\\)]*)\\)")
-		for match_any in scons.search_all(content):
-			var match: RegExMatch = match_any
-			var target_name := String(match.get_string(1))
+		# SCons SharedLibrary/Library calls. Supports classic
+		# SharedLibrary("name", [a.cpp]) plus VoxelPlus-style
+		# SharedLibrary("bin/name{}{}".format(...), source=sources) where
+		# sources = Glob("src/*.cpp").
+		for call_any in _extract_named_calls(content, ["SharedLibrary", "Library"]):
+			var call: Dictionary = call_any
+			var body := String(call.get("body", ""))
+			var target_raw := _first_string_literal(body)
+			if target_raw == "":
+				continue
+			var target_key := _library_stem(_strip_format_placeholders(target_raw))
+			if target_key == "":
+				continue
+			var source_tokens := _scons_source_tokens(body, content)
 			var sources := _resolve_build_sources(
-				manifest, _build_tokens(match.get_string(2)), file_set, basename_index
+				manifest, source_tokens, file_set, basename_index
 			)
-			targets[target_name] = {"manifest": manifest, "sources": sources}
+			for globbed_any in _files_matching_globs(
+				manifest, _extract_glob_patterns_from_tokens(source_tokens, content), file_set
+			):
+				var globbed_source := String(globbed_any)
+				if not globbed_source in sources:
+					sources.append(globbed_source)
+			targets[target_key] = {"manifest": manifest, "sources": sources}
+			# Also index the unstemmed path basename so OUTPUT-style aliases
+			# and unusual stems still resolve.
+			var raw_stem := _strip_format_placeholders(target_raw).get_file().get_basename()
+			if raw_stem != "" and not targets.has(raw_stem):
+				targets[raw_stem] = targets[target_key]
 
 		# Meson literal form: shared_library('name', 'a.cpp', 'b.cpp').
 		var meson := RegEx.new()
@@ -538,3 +569,324 @@ static func _word_contains(content: String, word: String) -> bool:
 			return true
 		idx = content.find(word, idx + 1)
 	return false
+
+
+## Parses Godot's .godot/extension_list.cfg. Each non-empty, non-comment line
+## is a res:// path to an enabled .gdextension descriptor.
+static func parse_extension_list(content: String) -> Array:
+	var out: Array = []
+	for line_any in content.split("\n"):
+		var line := String(line_any).strip_edges()
+		if line == "" or line.begins_with(";") or line.begins_with("#"):
+			continue
+		if line.begins_with("res://") and line.get_extension().to_lower() == "gdextension":
+			if not out.has(line):
+				out.append(line)
+	return out
+
+
+## When the atlas runs inside the project that loaded the extension, ClassDB
+## already knows every exported native class. Attribute those classes to the
+## generated libraries (single-library projects map 1:1; multi-library keeps
+## existing register_types attribution and only fills gaps).
+static func class_libraries_from_classdb(
+	libraries: Array, existing_class_libraries: Dictionary
+) -> Dictionary:
+	var out := {}
+	if libraries.is_empty():
+		return out
+	for class_any in ClassDB.get_class_list():
+		var cls_name := String(class_any)
+		if ClassDB.class_get_api_type(cls_name) != ClassDB.API_EXTENSION:
+			continue
+		if existing_class_libraries.has(cls_name):
+			out[cls_name] = String(existing_class_libraries[cls_name])
+			continue
+		if libraries.size() == 1:
+			out[cls_name] = String(libraries[0])
+	return out
+
+
+## Method names exported by a ClassDB class (public only). Used as scan
+## metadata so the Selection panel can show what the loaded binary provides.
+static func classdb_public_methods(cls_name: String) -> Array:
+	var out: Array = []
+	if not ClassDB.class_exists(cls_name):
+		return out
+	for method_any in ClassDB.class_get_method_list(cls_name, true):
+		var method: Dictionary = method_any
+		var name := String(method.get("name", ""))
+		if name == "" or name.begins_with("_"):
+			continue
+		if not out.has(name):
+			out.append(name)
+	out.sort()
+	return out
+
+
+## Scene/resource node types that refer to a registered native class.
+static func native_types_in_resource(content: String, class_libraries: Dictionary) -> Array:
+	var out: Array = []
+	if class_libraries.is_empty() or content == "":
+		return out
+	var regex := RegEx.new()
+	if regex.compile("(?m)^\\[node\\b[^\\]]*\\btype\\s*=\\s*\\\"([A-Za-z_][A-Za-z0-9_]*)\\\"") != OK:
+		return out
+	for match_any in regex.search_all(content):
+		var type_name := String((match_any as RegExMatch).get_string(1))
+		if class_libraries.has(type_name) and not out.has(type_name):
+			out.append(type_name)
+	return out
+
+
+static func _strip_format_placeholders(text: String) -> String:
+	var out := text
+	var regex := RegEx.new()
+	if regex.compile("\\{[^}]*\\}") == OK:
+		out = regex.sub(out, "", true)
+	while out.contains("{}"):
+		out = out.replace("{}", "")
+	return out
+
+
+static func _first_string_literal(body: String) -> String:
+	var regex := RegEx.new()
+	if regex.compile("[\\\"']([^\\\"']+)[\\\"']") != OK:
+		return ""
+	var match := regex.search(body)
+	return String(match.get_string(1)) if match != null else ""
+
+
+## Pulls source tokens from a SharedLibrary call body: keyword source=...,
+## positional second argument lists, Glob("...") calls, and bare identifiers
+## that name a Glob assignment elsewhere in the manifest.
+static func _scons_source_tokens(call_body: String, manifest_content: String) -> Array:
+	var tokens: Array = []
+	var source_kw := RegEx.new()
+	source_kw.compile("(?is)\\bsource\\s*=\\s*([^,\\)]+)")
+	var kw_match := source_kw.search(call_body)
+	var source_expr := ""
+	if kw_match != null:
+		source_expr = String(kw_match.get_string(1)).strip_edges()
+	else:
+		# Positional: SharedLibrary("name", <sources>)
+		var first_string_end := -1
+		var quote_regex := RegEx.new()
+		quote_regex.compile("[\\\"'][^\\\"']+[\\\"']")
+		var first_quote := quote_regex.search(call_body)
+		if first_quote != null:
+			first_string_end = first_quote.get_end()
+			var remainder := call_body.substr(first_string_end).strip_edges()
+			# Skip optional .format(...) after the first string.
+			if remainder.begins_with("."):
+				var format_call := _extract_leading_call(remainder)
+				if not format_call.is_empty():
+					remainder = remainder.substr(int(format_call.get("end", 0))).strip_edges()
+			if remainder.begins_with(","):
+				source_expr = remainder.substr(1).strip_edges()
+	if source_expr == "":
+		return tokens
+	# Inline Glob("...") in the source expression takes precedence over
+	# tokenising the call (which would smash Glob( into bare words).
+	var inline_globs := _extract_glob_patterns(source_expr)
+	if not inline_globs.is_empty():
+		for pattern_any in inline_globs:
+			tokens.append(String(pattern_any))
+		return tokens
+	for token_any in _build_tokens(source_expr):
+		tokens.append(String(token_any))
+	# Identifiers that refer to Glob(...) assignments in the same file.
+	var glob_vars := _scons_glob_assignments(manifest_content)
+	var expanded: Array = []
+	for token_any2 in tokens:
+		var token := String(token_any2)
+		if glob_vars.has(token):
+			for pattern_any in glob_vars[token]:
+				expanded.append(String(pattern_any))
+		else:
+			expanded.append(token)
+	return expanded
+
+
+static func _extract_glob_patterns_from_tokens(tokens: Array, _manifest_content: String) -> Array:
+	var patterns: Array = []
+	for token_any in tokens:
+		var token := String(token_any)
+		if "*" in token and not patterns.has(token):
+			patterns.append(token)
+		for pattern_any in _extract_glob_patterns(token):
+			var pattern := String(pattern_any)
+			if pattern != "" and not patterns.has(pattern):
+				patterns.append(pattern)
+	return patterns
+
+
+static func _scons_glob_assignments(content: String) -> Dictionary:
+	var out := {}
+	var regex := RegEx.new()
+	if regex.compile("(?m)^[ \\t]*([A-Za-z_][A-Za-z0-9_]*)[ \\t]*=[ \\t]*Glob[ \\t]*\\([ \\t]*[\\\"']([^\\\"']+)[\\\"']") != OK:
+		return out
+	for match_any in regex.search_all(content):
+		var match: RegExMatch = match_any
+		var var_name := String(match.get_string(1))
+		var pattern := String(match.get_string(2))
+		if not out.has(var_name):
+			out[var_name] = []
+		(out[var_name] as Array).append(pattern)
+	return out
+
+
+static func _extract_glob_patterns(content: String) -> Array:
+	var out: Array = []
+	var regex := RegEx.new()
+	if regex.compile("(?is)Glob[ \\t]*\\([ \\t]*[\\\"']([^\\\"']+)[\\\"']") != OK:
+		return out
+	for match_any in regex.search_all(content):
+		var pattern := String((match_any as RegExMatch).get_string(1))
+		if pattern != "" and not out.has(pattern):
+			out.append(pattern)
+	return out
+
+
+static func _files_matching_globs(manifest: String, patterns: Array, file_set: Dictionary) -> Array:
+	var out: Array = []
+	var build_base := manifest.get_base_dir()
+	var prefix := build_base if build_base.ends_with("/") else build_base + "/"
+	for pattern_any in patterns:
+		var pattern := String(pattern_any).replace("\\", "/")
+		if pattern == "":
+			continue
+		var recursive := "**" in pattern
+		var normalised := pattern.replace("**/", "").replace("**", "")
+		var slash := normalised.rfind("/")
+		var dir_part := normalised.substr(0, slash) if slash != -1 else ""
+		var file_part := normalised.substr(slash + 1) if slash != -1 else normalised
+		var required_ext := ""
+		if file_part.begins_with("*.") and file_part.find("*", 2) == -1:
+			required_ext = file_part.substr(2).to_lower()
+		var dir_prefix := prefix
+		if dir_part != "":
+			dir_prefix = prefix.path_join(dir_part)
+			if not dir_prefix.ends_with("/"):
+				dir_prefix += "/"
+		for candidate_any in file_set.keys():
+			var candidate: String = candidate_any
+			if candidate == manifest:
+				continue
+			if not candidate.begins_with(prefix):
+				continue
+			if required_ext != "" and candidate.get_extension().to_lower() != required_ext:
+				continue
+			if dir_part != "":
+				if recursive:
+					if not (candidate.begins_with(dir_prefix) or candidate.get_base_dir() == dir_prefix.trim_suffix("/")):
+						continue
+				else:
+					# Glob("src/*.cpp") → only files directly in src/
+					var expected_dir := prefix.path_join(dir_part).simplify_path()
+					if candidate.get_base_dir() != expected_dir:
+						continue
+			elif not recursive and required_ext != "":
+				# Glob("*.cpp") beside the manifest
+				if candidate.get_base_dir() != build_base:
+					continue
+			if not out.has(candidate):
+				out.append(candidate)
+	return out
+
+
+static func _extract_named_calls(content: String, names: Array) -> Array:
+	var out: Array = []
+	for name_any in names:
+		var name := String(name_any)
+		var search_from := 0
+		while true:
+			var idx := content.find(name, search_from)
+			if idx == -1:
+				break
+			var before_ok := idx == 0 or IDENT_CHARS.find(content[idx - 1]) == -1
+			var after := idx + name.length()
+			var after_ok := after < content.length() and (content[after] == "(" or content[after] in " \t\r\n")
+			if not (before_ok and after_ok):
+				search_from = idx + name.length()
+				continue
+			# Advance to opening paren.
+			var paren := content.find("(", after)
+			if paren == -1:
+				break
+			var depth := 0
+			var i := paren
+			var in_string := false
+			var quote := ""
+			while i < content.length():
+				var c := content[i]
+				if in_string:
+					if c == "\\" and i + 1 < content.length():
+						i += 2
+						continue
+					if c == quote:
+						in_string = false
+					i += 1
+					continue
+				if c == "\"" or c == "'":
+					in_string = true
+					quote = c
+					i += 1
+					continue
+				if c == "(":
+					depth += 1
+				elif c == ")":
+					depth -= 1
+					if depth == 0:
+						out.append({
+							"name": name,
+							"body": content.substr(paren + 1, i - paren - 1),
+							"start": idx,
+							"end": i + 1,
+						})
+						search_from = i + 1
+						break
+				i += 1
+			if depth != 0:
+				search_from = paren + 1
+	return out
+
+
+static func _extract_leading_call(text: String) -> Dictionary:
+	var stripped := text.strip_edges()
+	if not stripped.begins_with("."):
+		return {}
+	var name_start := 1
+	while name_start < stripped.length() and IDENT_CHARS.find(stripped[name_start]) != -1:
+		name_start += 1
+	# Find '(' after .name
+	var paren := stripped.find("(", 1)
+	if paren == -1:
+		return {}
+	var depth := 0
+	var i := paren
+	var in_string := false
+	var quote := ""
+	while i < stripped.length():
+		var c := stripped[i]
+		if in_string:
+			if c == "\\" and i + 1 < stripped.length():
+				i += 2
+				continue
+			if c == quote:
+				in_string = false
+			i += 1
+			continue
+		if c == "\"" or c == "'":
+			in_string = true
+			quote = c
+			i += 1
+			continue
+		if c == "(":
+			depth += 1
+		elif c == ")":
+			depth -= 1
+			if depth == 0:
+				return {"end": i + 1, "body": stripped.substr(paren + 1, i - paren - 1)}
+		i += 1
+	return {}

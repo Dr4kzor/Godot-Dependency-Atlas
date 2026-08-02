@@ -1,0 +1,10 @@
+# Dependency Atlas
+# The config file and ai_map.md ARE tracked deliberately: filter/theme
+# choices and the agent-oriented dependency summary are project decisions.
+logs/
+*.log
+
+# deleted.log is tracked deliberately: it is the record of what this tool
+# removed, which is exactly the kind of thing a team wants in history.
+!deleted.log
+!ai_map.md

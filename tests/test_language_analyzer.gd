@@ -9,6 +9,8 @@ func _initialize() -> void:
 	_test_language_boundaries()
 	_test_build_roots()
 	_test_native_bridge()
+	_test_scons_bridge()
+	_test_extension_list_and_globs()
 	if failures == 0:
 		print("Language analyzer: all tests passed")
 	quit(failures)
@@ -130,4 +132,77 @@ func _test_native_bridge() -> void:
 			'[DllImport("demo")] static extern void ping();', [library]
 		),
 		"Native bridge: C# DllImport did not resolve the generated library"
+	)
+
+
+func _test_scons_bridge() -> void:
+	var descriptor := "res://native_scons/voxel_native.gdextension"
+	var library := "res://native_scons/bin/voxel_native.linux.template_debug.arm64.so"
+	var manifest := "res://native_scons/SConstruct"
+	var chunk := "res://native_scons/src/voxel_chunk.cpp"
+	var registration := "res://native_scons/src/register_types.cpp"
+	var vendored := "res://native_scons/godot-cpp/gen/src/classes/virtual_joystick.cpp"
+	var sconstruct := """#!/usr/bin/env python
+env = SConscript("godot-cpp/SConstruct")
+sources = Glob("src/*.cpp")
+library = env.SharedLibrary(
+	"bin/voxel_native{}{}".format(env["suffix"], env["SHLIBSUFFIX"]),
+    source=sources,
+)
+"""
+	var contents := {
+		descriptor: "[libraries]\nlinux.debug.arm64 = \"./bin/voxel_native.linux.template_debug.arm64.so\"\n",
+		manifest: sconstruct,
+		chunk: "class VoxelChunk {};",
+		registration: "void init() { ClassDB::register_class<VoxelChunk>(); }",
+		vendored: "class VirtualJoystick {};",
+	}
+	var files := {
+		descriptor: true, library: true, manifest: true, chunk: true,
+		registration: true, vendored: true,
+	}
+	var basenames := {
+		"voxel_native.linux.template_debug.arm64.so": [library],
+		"voxel_chunk.cpp": [chunk],
+		"register_types.cpp": [registration],
+		"virtual_joystick.cpp": [vendored],
+		"SConstruct": [manifest],
+	}
+	var symbols := Analyzer.build_symbol_index(contents)
+	var bridge := Analyzer.native_bridge(contents, files, basenames, symbols)
+	_expect(library in bridge.edges.get(descriptor, []), "SCons bridge: descriptor did not reach library")
+	_expect(manifest in bridge.edges.get(library, []), "SCons bridge: library did not reach SConstruct")
+	_expect(chunk in bridge.edges.get(library, []), "SCons bridge: library missed Glob src/*.cpp member")
+	_expect(registration in bridge.edges.get(library, []), "SCons bridge: library missed register_types.cpp")
+	_expect(
+		bridge.class_libraries.get("VoxelChunk", "") == library,
+		"SCons bridge: VoxelChunk was not associated with its library"
+	)
+	_expect(
+		not vendored in bridge.edges.get(library, []),
+		"SCons bridge: vendored godot-cpp virtual_joystick.cpp leaked into library sources"
+	)
+	var build_refs := Analyzer.references(manifest, sconstruct, files, basenames, symbols)
+	_expect(chunk in build_refs.files, "SCons Glob: src/*.cpp did not resolve voxel_chunk.cpp")
+	_expect(
+		not vendored in build_refs.files,
+		"SCons Glob: project-wide *.cpp falsely included godot-cpp virtual_joystick.cpp"
+	)
+
+
+func _test_extension_list_and_globs() -> void:
+	var listed := Analyzer.parse_extension_list(
+		"res://native/demo.gdextension\n; comment\nres://native_scons/voxel_native.gdextension\n"
+	)
+	_expect(listed.size() == 2, "extension_list: expected two descriptors")
+	_expect(
+		"res://native/demo.gdextension" in listed,
+		"extension_list: demo descriptor missing"
+	)
+	_expect(
+		"NativeChild" in Analyzer.native_types_in_resource(
+			"[node name=\"Child\" type=\"NativeChild\" parent=\".\"]\n",
+			{"NativeChild": "res://native/bin/libdemo.so"}
+		),
+		"Scene type=: NativeChild node type was not detected"
 	)

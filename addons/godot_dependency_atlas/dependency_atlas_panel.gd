@@ -5,10 +5,12 @@ extends VBoxContainer
 signal open_3d_atlas_requested
 
 const OrphanScanner = preload("res://addons/godot_dependency_atlas/orphan_scanner.gd")
+const AiMap = preload("res://addons/godot_dependency_atlas/ai_map.gd")
 const DeletionManager = preload("res://addons/godot_dependency_atlas/graph3d/deletion_manager.gd")
 const PermissionDialog = preload("res://addons/godot_dependency_atlas/graph3d/permission_dialog.gd")
 const TypeIcons = preload("res://addons/godot_dependency_atlas/graph3d/type_icons.gd")
 const GraphMetrics = preload("res://addons/godot_dependency_atlas/graph3d/graph_metrics.gd")
+const OFConfig = preload("res://addons/godot_dependency_atlas/graph3d/of_config.gd")
 const DeletionWarningScene = preload("res://addons/godot_dependency_atlas/deletion_warning_overlay.tscn")
 
 ## Minimum height requested when this panel is first docked.
@@ -26,9 +28,11 @@ var _delete_button: Button
 var _pending_delete := ""
 var _plain_orphan_paths := {}
 var _last_log_text := ""
+var _last_scan_result := {}
 var _save_dialog: EditorFileDialog
 var _save_log_button: Button
 var _save_as_button: Button
+var _ai_map_button: Button
 var _deletion_warning: DeletionWarningOverlay
 
 
@@ -73,6 +77,13 @@ func _init() -> void:
 	_save_as_button.disabled = true
 	_save_as_button.pressed.connect(_on_save_log_as)
 	toolbar.add_child(_save_as_button)
+
+	_ai_map_button = Button.new()
+	_ai_map_button.text = "Write AI Map"
+	_ai_map_button.tooltip_text = "Write dependency_atlas/ai_map.md — a compact summary for coding agents (auto-refreshed on each scan)"
+	_ai_map_button.disabled = true
+	_ai_map_button.pressed.connect(_on_write_ai_map)
+	toolbar.add_child(_ai_map_button)
 
 	var icon_button := Button.new()
 	icon_button.text = "Export Type Icons"
@@ -257,9 +268,29 @@ func start_scan() -> void:
 	_deletion.revoke()
 	_refresh_delete_button()
 	_last_log_text = String(result.get("log_text", ""))
+	_last_scan_result = result
 	_save_log_button.disabled = _last_log_text == ""
 	_save_as_button.disabled = _last_log_text == ""
+	_ai_map_button.disabled = String(result.get("error", "")) != ""
 	_populate(result)
+	if String(result.get("error", "")) == "":
+		var map_error := AiMap.write_from_scan(result, "res://")
+		if map_error != "":
+			_status_label.text = "Scan done, but AI map failed: " + map_error
+		else:
+			EditorInterface.get_resource_filesystem().scan()
+
+
+func _on_write_ai_map() -> void:
+	if _last_scan_result.is_empty() or String(_last_scan_result.get("error", "")) != "":
+		_status_label.text = "Run a successful scan first."
+		return
+	var problem := AiMap.write_from_scan(_last_scan_result, "res://")
+	if problem != "":
+		_status_label.text = "Could not write AI map: " + problem
+		return
+	EditorInterface.get_resource_filesystem().scan()
+	_status_label.text = "AI map written to " + AiMap.map_path("res://")
 
 
 func _on_progress(phase: String, done: int, total: int) -> void:
