@@ -8,7 +8,13 @@ If you find bugs you can report them, Ideally with a project added that is able 
 
 It is almost 100% reliable for gdscript with lower confidence for other languages!
 
+![Orphan scan results in the editor](screenshot/Screenshot.png)
+![3D dependency graph — native / C++](screenshot/Screenshot_20260803-001655_Termux_X11.png)
+![3D dependency graph — change impact](screenshot/Screenshot_20260803-001934_Termux_X11.png)
+![Selection panel with references and blast radius](screenshot/Screenshot_20260803-001953_Termux_X11.png)
+![Project files panel and change-impact menu](screenshot/Screenshot_20260803-002157_Termux_X11.png)
 
+Scans GDScript, C, C++, and C#. Builds a 3D graph of how project files interconnect, finds files that are never used, and shows the blast radius of refactoring a single file.
 
 # Godot Dependency Atlas
 
@@ -16,8 +22,6 @@ Godot Dependency Atlas maps how a Godot project’s scenes, scripts, resources,
 native code, and build files relate to one another. It can report files that
 are unreachable from the project’s entry points and render the resulting
 dependency graph as an interactive 3D scene.
-
-![Godot Dependency Atlas 3D graph](screenshot/Screenshot.png)
 
 The atlas is intended for investigation and informed cleanup. An orphan result
 is a review candidate, not proof that a file is safe to delete: static analysis
