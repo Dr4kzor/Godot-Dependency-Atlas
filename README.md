@@ -14,7 +14,17 @@ It is almost 100% reliable for gdscript with lower confidence for other language
 ![Selection panel with references and blast radius](screenshot/Screenshot_20260803-001953_Termux_X11.png)
 ![Project files panel and change-impact menu](screenshot/Screenshot_20260803-002157_Termux_X11.png)
 
-Scans GDScript, C, C++, and C#. Builds a 3D graph of how project files interconnect, finds files that are never used, and shows the blast radius of refactoring a single file.
+Scans GDScript, C, C++, and C#. Builds a 3D graph of how your project files interconnect, finds files that are never used, shows the blast radius of refactoring a single file, shows all possible points of entry in your code that could reach a file.
+
+
+
+
+
+
+
+# From here on out to the bottom its all AI generated, TDLR: just read the description above and see the screenshots.
+
+
 
 # Godot Dependency Atlas
 
