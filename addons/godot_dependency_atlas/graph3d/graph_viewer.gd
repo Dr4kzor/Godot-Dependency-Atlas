@@ -23,6 +23,7 @@ extends Node3D
 ## readable from the side.
 
 const OrphanScanner = preload("res://addons/godot_dependency_atlas/orphan_scanner.gd")
+const PathTracer = preload("res://addons/godot_dependency_atlas/graph3d/path_tracer.gd")
 const AiMap = preload("res://addons/godot_dependency_atlas/ai_map.gd")
 const FlyCamera = preload("res://addons/godot_dependency_atlas/graph3d/fly_camera.gd")
 const TypeIcons = preload("res://addons/godot_dependency_atlas/graph3d/type_icons.gd")
@@ -187,9 +188,6 @@ const GATHER_MAX_SUBTREE := 60
 const GATHER_MAX_RELATIONS := 45
 const MAX_TRACED_PATHS := 12
 const MAX_PATH_DEPTH := 24
-## Hard ceiling on search expansion: enumerating every path through a dense
-## graph is exponential, and a stalled UI is worse than a truncated answer.
-const PATH_SEARCH_BUDGET := 40000
 
 # --- path trace animation ----------------------------------------------------
 ## A pulse travels each traced chain from the entry point to the selection,
@@ -519,6 +517,10 @@ var _dir_nodes := {}
 var _selected := ""
 var _scan_done := false
 var _roots: Array = []
+## Scan entry points (main scene, autoloads, plugins, …). Kept separate from
+## `_roots`, which is the *layout* root list and becomes `["res://"]` in folder
+## mode — useless for reachability tracing.
+var _entry_paths: Array = []
 var _content_cache := {}
 var _class_index := {}   # class_name -> defining file
 var _link_graph := {}    # source -> { target -> lines of code touching it }
@@ -566,6 +568,7 @@ func _run_scan() -> void:
 	_parent_of.clear()
 	_class_of.clear()
 	_reverse_graph.clear()
+	_entry_paths.clear()
 	_embed_hosts.clear()
 	_in_degree.clear()
 	_content_cache.clear()
@@ -617,6 +620,12 @@ func _run_scan() -> void:
 	_edge_kinds = result.get("edge_kinds", {})
 	_dep_depth = result.get("depth", {})
 	_dep_parent = result.get("tree_parent", {})
+	_entry_paths.clear()
+	for root_any in result.get("roots", []):
+		var root_info: Dictionary = root_any
+		var root_path := String(root_info.get("path", ""))
+		if root_path != "" and not _entry_paths.has(root_path):
+			_entry_paths.append(root_path)
 	for o in result.get("orphans", []):
 		var od: Dictionary = o
 		_orphan_set[String(od["path"])] = true
@@ -6265,39 +6274,29 @@ func _build_reverse_graph() -> void:
 ## Every chain from an entry point to `target`, up to a cap.
 ##
 ## Answers "why is this in my build?" -- and when you want something gone, each
-## path is a chain of which exactly one link has to be cut. Bounded on both
-## path count and expansion steps, because enumerating all paths through a
-## dense graph is exponential in the worst case.
+## path is a chain of which exactly one link has to be cut.
+##
+## Uses reverse BFS over `_reverse_graph` (see PathTracer), not a forward
+## simple-path DFS: hubs such as UI.tscn (~90 children) used to exhaust the
+## old expansion budget before a sibling like VisionBar.gd was ever tried.
+## Entry points come from the scan (`_entry_paths`), not layout `_roots` —
+## folder mode's layout root is `res://`, which has no dependency edges.
 func _find_paths_to(target: String) -> Array:
-	var results: Array = []
-	var budget := PATH_SEARCH_BUDGET
-	for r in _roots:
-		var root: String = r
-		if results.size() >= MAX_TRACED_PATHS:
-			break
-		var stack: Array = [[root, [root] as Array, {root: true}]]
-		while not stack.is_empty() and results.size() < MAX_TRACED_PATHS and budget > 0:
-			budget -= 1
-			var frame: Array = stack.pop_back()
-			var node: String = frame[0]
-			var path: Array = frame[1]
-			var on_path: Dictionary = frame[2]
-			if node == target:
-				results.append(path)
-				continue
-			if path.size() >= MAX_PATH_DEPTH:
-				continue
-			for c in _refs_of(node):
-				var child: String = c
-				if on_path.has(child):
-					continue   # would revisit, i.e. a cycle
-				var next_on_path: Dictionary = on_path.duplicate()
-				next_on_path[child] = true
-				var next_path: Array = path.duplicate()
-				next_path.append(child)
-				stack.append([child, next_path, next_on_path])
-	results.sort_custom(func(a, b): return (a as Array).size() < (b as Array).size())
-	return results
+	var entries: Array = _entry_paths.duplicate()
+	if entries.is_empty():
+		# Fallback for scans that predate _entry_paths, or partial rebuilds:
+		# depth-0 nodes are the real entry points in dependency layout.
+		for key in _dep_depth.keys():
+			if int(_dep_depth[key]) == 0:
+				entries.append(String(key))
+		if entries.is_empty():
+			for r in _roots:
+				var root := String(r)
+				if not _dir_nodes.has(root) and not root.begins_with("::"):
+					entries.append(root)
+	return PathTracer.find_paths_to(
+		target, entries, _reverse_graph, _dep_parent, MAX_TRACED_PATHS, MAX_PATH_DEPTH
+	)
 
 
 ## Files affected by changing `path`, keyed by how many hops away they are.
